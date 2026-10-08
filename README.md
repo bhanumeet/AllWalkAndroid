@@ -20,18 +20,36 @@ The app operates at a high frame rate of 30 frames per second, and each of these
 - **Road Verification**: Once every second, the app calculates if the user remains on the correct path.
 - **OCR Functionality**: OCR (Optical Character Recognition) operates on every frame, ensuring that any visible text in the user's surroundings is promptly detected and processed.
 
-## API Usage
+## API keys
 
-- **Google**: Street View, Maps, Places, and Directions share one API key.
-- **Geoapify**: Geocode and reverse geocode.
+This repository does not contain API keys. The app reads them from `local.properties`, which Git ignores. Copy `local.properties.example` to `local.properties` and fill in the values below. Do not commit that file.
 
-Keys are not stored in this repository. Put them in `local.properties` (see `local.properties.example`).
+You need a Google key to run navigation. A Geoapify key is only needed if you choose Geoapify for destination search in Settings. Google Places works with the Google key alone.
 
-## How to Set Up
+### Google key (`MAPS_API_KEY`)
 
-1. Clone the repository to your local machine.
-2. Copy `local.properties.example` to `local.properties` and fill in `sdk.dir`, `MAPS_API_KEY`, and `GEOAPIFY_API_KEY`.
-3. Follow the build instructions for Android to compile and install the application on your device.
+Used for ARCore Geospatial localization, the map, walking directions, and Google Places search.
+
+1. Open [Google Cloud Console](https://console.cloud.google.com/) and create or select a project.
+2. Turn on billing for that project. Maps, Directions, and Places will not respond without it.
+3. Enable these APIs: [ARCore API](https://console.cloud.google.com/apis/library/arcore.googleapis.com), [Maps SDK for Android](https://console.cloud.google.com/apis/library/maps-android-backend.googleapis.com), [Directions API](https://console.cloud.google.com/apis/library/directions-backend.googleapis.com), and [Places API](https://console.cloud.google.com/apis/library/places-backend.googleapis.com).
+4. Go to [APIs & Services → Credentials](https://console.cloud.google.com/apis/credentials), create an API key, and paste it as `MAPS_API_KEY`.
+5. Restrict the key to those APIs, and to this Android app (`com.google.ar.core.codelabs.hellogeospatial`) plus your debug or release certificate, so a leaked key cannot be reused.
+
+### Geoapify key (`GEOAPIFY_API_KEY`)
+
+Used only for Geoapify destination search and reverse geocoding.
+
+1. Create a free account at [Geoapify](https://www.geoapify.com/).
+2. Open the [Geoapify dashboard](https://myprojects.geoapify.com/) and copy the project API key.
+3. Paste it as `GEOAPIFY_API_KEY`.
+
+## How to set up
+
+1. Clone this repository.
+2. Open the project in Android Studio so it can write `sdk.dir` into `local.properties`.
+3. Add `MAPS_API_KEY` and, if you want Geoapify search, `GEOAPIFY_API_KEY` to that same file.
+4. Run the app on a physical Android phone with Google Play Services for AR. The Geospatial API does not work on an emulator.
 
 ## Contributing
 
