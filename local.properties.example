@@ -1,0 +1,6 @@
+## Copy this file to local.properties and fill in the values.
+## local.properties is gitignored. Do not commit API keys.
+
+sdk.dir=/path/to/Android/sdk
+MAPS_API_KEY=
+GEOAPIFY_API_KEY=

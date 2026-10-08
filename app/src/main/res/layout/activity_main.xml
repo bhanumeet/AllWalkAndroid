@@ -1,0 +1,223 @@
+<!--
+   Copyright 2022 Google LLC
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+-->
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    tools:context=".HelloGeoActivity">
+
+  <android.opengl.GLSurfaceView
+      android:id="@+id/surfaceview"
+      android:layout_width="fill_parent"
+      android:layout_height="fill_parent"
+      android:layout_gravity="top" />
+
+  <com.google.ar.core.codelabs.hellogeospatial.helpers.DoorBoxOverlay
+      android:id="@+id/door_box_overlay"
+      android:layout_width="match_parent"
+      android:layout_height="match_parent"
+      android:clickable="false"
+      android:focusable="false" />
+
+  <LinearLayout
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:gravity="center_vertical"
+      android:orientation="horizontal"
+      android:paddingStart="4dp"
+      android:paddingEnd="4dp"
+      android:paddingTop="4dp"
+      android:paddingBottom="4dp">
+
+    <EditText
+        android:id="@+id/destination_text_input"
+        android:layout_width="0dp"
+        android:layout_height="40dp"
+        android:layout_weight="1"
+        android:background="@color/cardview_light_background"
+        android:hint="Search destination"
+        android:inputType="text"
+        android:paddingStart="10dp"
+        android:paddingEnd="10dp"
+        android:textColor="@color/cardview_dark_background"
+        android:textColorHint="#88000000"
+        android:textSize="14sp" />
+
+    <ImageButton
+        android:id="@+id/listen_button"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:layout_marginStart="4dp"
+        android:background="@color/cardview_light_background"
+        android:contentDescription="Listen"
+        android:padding="8dp"
+        android:scaleType="centerInside"
+        android:src="@drawable/ic_mic" />
+
+    <Button
+        android:id="@+id/submit_button"
+        android:layout_width="wrap_content"
+        android:layout_height="40dp"
+        android:layout_marginStart="2dp"
+        android:minWidth="0dp"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:text="Go"
+        android:textSize="13sp" />
+
+    <ImageButton
+        android:id="@+id/settings_button"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:layout_marginStart="2dp"
+        android:background="@color/cardview_light_background"
+        android:contentDescription="Settings"
+        android:padding="8dp"
+        android:scaleType="centerInside"
+        android:src="@drawable/ic_settings" />
+
+  </LinearLayout>
+
+  <Button
+      android:id="@+id/reset_button"
+      android:layout_width="wrap_content"
+      android:layout_height="wrap_content"
+      android:layout_above="@+id/buffer_controls"
+      android:layout_alignParentEnd="true"
+      android:layout_marginEnd="6dp"
+      android:layout_marginBottom="5dp"
+      android:text="Reset" />
+
+  <Button
+      android:id="@+id/ocr_button"
+      android:layout_width="wrap_content"
+      android:layout_height="wrap_content"
+      android:layout_above="@+id/buffer_controls"
+      android:layout_alignParentEnd="true"
+      android:layout_marginEnd="6dp"
+      android:layout_marginBottom="50dp"
+      android:text="OCR OFF" />
+
+  <Button
+      android:id="@+id/reset_vps_button"
+      android:layout_width="wrap_content"
+      android:layout_height="wrap_content"
+      android:layout_above="@+id/buffer_controls"
+      android:layout_alignParentEnd="true"
+      android:layout_marginEnd="6dp"
+      android:layout_marginBottom="95dp"
+      android:text="Reset VPS" />
+
+  <Button
+      android:id="@+id/copy_dest_coords_button"
+      android:layout_width="wrap_content"
+      android:layout_height="wrap_content"
+      android:layout_above="@+id/buffer_controls"
+      android:layout_alignParentStart="true"
+      android:layout_marginStart="6dp"
+      android:layout_marginBottom="5dp"
+      android:text="Copy dest" />
+
+  <Button
+      android:id="@+id/export_log_button"
+      android:layout_width="wrap_content"
+      android:layout_height="wrap_content"
+      android:layout_above="@+id/buffer_controls"
+      android:layout_toEndOf="@+id/copy_dest_coords_button"
+      android:layout_marginStart="6dp"
+      android:layout_marginBottom="5dp"
+      android:text="Export log" />
+
+  <TextView
+      android:id="@+id/find_textview"
+      android:layout_width="wrap_content"
+      android:layout_height="wrap_content"
+      android:layout_above="@+id/buffer_controls"
+      android:layout_alignParentStart="true"
+      android:layout_marginStart="0dp"
+      android:layout_marginBottom="5dp"
+      android:background="#FFFFFF"
+      android:text=""
+      android:textColor="#000000" />
+
+  <LinearLayout
+      android:id="@+id/buffer_controls"
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:layout_above="@+id/map_wrapper"
+      android:layout_marginStart="8dp"
+      android:layout_marginEnd="8dp"
+      android:layout_marginBottom="4dp"
+      android:background="#CCFFFFFF"
+      android:gravity="center_vertical"
+      android:orientation="horizontal"
+      android:paddingStart="8dp"
+      android:paddingTop="4dp"
+      android:paddingEnd="8dp"
+      android:paddingBottom="4dp">
+
+    <TextView
+        android:id="@+id/buffer_label"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:minWidth="96dp"
+        android:text="Buffer: 5 m"
+        android:textColor="#000000"
+        android:textSize="13sp" />
+
+    <TextView
+        android:id="@+id/provider_status"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:text="Dest: Geoapify"
+        android:textColor="#111111"
+        android:textSize="12sp" />
+
+    <SeekBar
+        android:id="@+id/buffer_slider"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:max="20"
+        android:min="1"
+        android:progress="5" />
+  </LinearLayout>
+
+  <com.google.ar.core.codelabs.hellogeospatial.helpers.MapTouchWrapper
+      android:id="@+id/map_wrapper"
+      android:layout_width="match_parent"
+      android:layout_height="400dp"
+      android:layout_alignParentBottom="true">
+
+    <fragment
+        android:id="@+id/map"
+        android:name="com.google.android.gms.maps.SupportMapFragment"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        tools:context=".HelloGeoActivity" />
+
+    <TextView
+        android:id="@+id/distance_textView"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Distance"
+        android:background="#FFFFFF"
+        android:textColor="#000000" />
+
+  </com.google.ar.core.codelabs.hellogeospatial.helpers.MapTouchWrapper>
+
+</RelativeLayout>

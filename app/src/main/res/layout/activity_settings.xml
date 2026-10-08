@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="20dp"
+    android:background="#F5F5F5">
+
+  <TextView
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:text="Settings"
+      android:textSize="24sp"
+      android:textStyle="bold"
+      android:textColor="#111111"
+      android:paddingBottom="16dp" />
+
+  <TextView
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:text="Destination search provider"
+      android:textSize="16sp"
+      android:textStyle="bold"
+      android:textColor="#222222"
+      android:paddingBottom="8dp" />
+
+  <TextView
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:text="Used when you type a place name and press Submit. Map taps are unchanged."
+      android:textSize="13sp"
+      android:textColor="#555555"
+      android:paddingBottom="12dp" />
+
+  <RadioGroup
+      android:id="@+id/destination_provider_group"
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:background="#FFFFFF"
+      android:padding="12dp">
+
+    <RadioButton
+        android:id="@+id/provider_geoapify"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Geoapify Geocoding"
+        android:textColor="#111111"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Reverse geocode + name search near your location (current default)."
+        android:textSize="12sp"
+        android:textColor="#666666"
+        android:paddingStart="32dp"
+        android:paddingBottom="12dp" />
+
+    <RadioButton
+        android:id="@+id/provider_google_places"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Google Places API"
+        android:textColor="#111111"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Places Text Search near your location using your Google Cloud API key."
+        android:textSize="12sp"
+        android:textColor="#666666"
+        android:paddingStart="32dp"
+        android:paddingBottom="4dp" />
+  </RadioGroup>
+
+  <TextView
+      android:id="@+id/settings_status"
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:paddingTop="16dp"
+      android:textColor="#0B6E4F"
+      android:textSize="14sp" />
+
+  <Button
+      android:id="@+id/settings_done_button"
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:layout_marginTop="24dp"
+      android:text="Done" />
+</LinearLayout>

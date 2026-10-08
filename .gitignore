@@ -1,0 +1,8 @@
+.idea
+.gradle
+build
+.DS_Store
+local.properties
+*.iml
+
+app/src/main/res/values/api_key.xml

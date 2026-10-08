@@ -1,0 +1,1201 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+@page { size: A4; margin: 18mm 16mm 20mm 16mm; }
+* { box-sizing: border-box; }
+body { font-family: -apple-system, "Helvetica Neue", Arial, sans-serif;
+       color: #1a1f26; font-size: 10.5pt; line-height: 1.5; margin: 0; }
+h1,h2,h3 { color: #0b2a4a; line-height: 1.2; }
+h2 { font-size: 15pt; margin: 26px 0 8px; padding-top: 6px;
+     border-top: 2px solid #0b6efd; page-break-after: avoid; }
+h3 { font-size: 12pt; margin: 16px 0 6px; }
+p { margin: 7px 0; }
+ul,ol { margin: 6px 0 10px; padding-left: 20px; }
+li { margin: 3px 0; }
+b { color: #0b2a4a; }
+.mono, .mono * { font-family: "SF Mono", "Menlo", Consolas, monospace; font-size: 9.2pt;
+        background: #eef2f7; padding: 0 3px; border-radius: 3px; color: #0a3d62; }
+
+/* cover */
+.cover { height: 245mm; display: flex; flex-direction: column; justify-content: center;
+         page-break-after: always; }
+.cover-kicker { color: #0b6efd; font-weight: 700; letter-spacing: 3px;
+                text-transform: uppercase; font-size: 11pt; }
+.cover-title { font-size: 30pt; margin: 14px 0 18px; color: #0b2a4a; }
+.cover-sub { font-size: 12.5pt; color: #3a4652; max-width: 150mm; line-height: 1.55; }
+.cover-meta { margin-top: 40px; font-size: 10.5pt; color: #3a4652; }
+.cover-meta div { margin: 5px 0; }
+
+/* toc */
+.toc-h { border: none; }
+ol.toc { font-size: 11pt; line-height: 1.9; }
+ol.toc li { margin: 0; }
+
+/* callouts */
+.callout { background: #eef5ff; border-left: 4px solid #0b6efd; padding: 10px 14px;
+           margin: 14px 0; border-radius: 0 6px 6px 0; page-break-inside: avoid; }
+.callout.small { font-size: 9.8pt; background: #f6f8fa; border-left-color: #7a8899; }
+.callout ol, .callout ul { margin: 6px 0; }
+
+/* comparison table */
+table.cmp, table.cmp th, table.cmp td { border: 1px solid #cdd6e0; border-collapse: collapse; }
+table.cmp { width: 100%; margin: 12px 0; font-size: 9.8pt; }
+table.cmp th { background: #0b2a4a; color: #fff; text-align: left; padding: 7px 9px; }
+table.cmp td { padding: 6px 9px; vertical-align: top; }
+table.cmp tr:nth-child(even) td { background: #f3f6fa; }
+table.cmp td:first-child { font-weight: 700; color: #0b2a4a; width: 22%; }
+
+/* code */
+.codecap { font-family: "SF Mono","Menlo",monospace; font-size: 8.4pt; color: #5a6b7b;
+           background: #e7edf3; padding: 4px 10px; border-radius: 6px 6px 0 0;
+           border: 1px solid #d0dae4; border-bottom: none; margin-top: 14px; }
+pre.code { margin: 0 0 12px; background: #0f1b2d; border-radius: 0 0 6px 6px;
+           padding: 8px 4px; overflow: hidden; page-break-inside: avoid; }
+.codetbl { border-collapse: collapse; width: 100%; }
+.codetbl td { font-family: "SF Mono","Menlo",Consolas,monospace; font-size: 8.1pt;
+              line-height: 1.45; vertical-align: top; padding: 0; }
+.codetbl td.ln { color: #47617e; text-align: right; padding: 0 10px 0 6px;
+                 user-select: none; width: 30px; white-space: nowrap; }
+.codetbl td.cd { color: #dfe8f2; white-space: pre-wrap; word-break: break-word;
+                 padding-right: 8px; }
+.cd .kw { color: #6fb2ff; }
+.cd .cm { color: #7f9a72; font-style: italic; }
+
+/* diagram */
+pre.diagram { background: #f6f8fa; border: 1px solid #d0dae4; border-radius: 6px;
+              padding: 12px 14px; font-family: "SF Mono","Menlo",monospace;
+              font-size: 8.1pt; line-height: 1.35; color: #23303d;
+              white-space: pre; overflow: hidden; page-break-inside: avoid; }
+.fin { font-style: italic; color: #0b2a4a; border-top: 1px solid #cdd6e0;
+       padding-top: 10px; margin-top: 16px; }
+</style></head><body>
+
+<div class="cover">
+  <div class="cover-kicker">Technical Deep Dive</div>
+  <h1 class="cover-title">How blindnavandroid Achieves<br>Sub-Meter Walking Navigation</h1>
+  <div class="cover-sub">A line-by-line explanation of the ARCore Geospatial (VPS) pipeline,
+     heading fusion, route geometry, and spoken guidance that keep a walker on the
+     sidewalk where Google Maps drifts into the street.</div>
+  <div class="cover-meta">
+    <div><b>Codebase</b> &nbsp; com.google.ar.core.codelabs.hellogeospatial</div>
+    <div><b>Platform</b> &nbsp; Android &middot; ARCore Geospatial API &middot; Kotlin</div>
+    <div><b>Audience</b> &nbsp; Engineers extending or reviewing the navigation core</div>
+  </div>
+</div>
+
+
+<h2 class="toc-h">Contents</h2>
+<ol class="toc">
+  <li>Executive summary &mdash; why the dot doesn't drift</li>
+  <li>GPS vs. VPS: the root cause of the accuracy gap</li>
+  <li>System architecture</li>
+  <li>Enabling Geospatial mode &amp; the session lifecycle</li>
+  <li>The per-frame render loop (<span class="mono">onDrawFrame</span>)</li>
+  <li>Heading fusion: the circular moving average</li>
+  <li>Drawing the position on the 2D map</li>
+  <li>The routing pipeline: destination &rarr; polyline</li>
+  <li>Polyline decoding</li>
+  <li>Route geometry &amp; on-route detection (the distance algorithm)</li>
+  <li>Turn-by-turn guidance geometry (<span class="mono">ArrowAlignedGuide</span>)</li>
+  <li>Spoken guidance (<span class="mono">SpeechGuide</span> / TTS)</li>
+  <li>The OCR side-channel</li>
+  <li>Accuracy budget, failure modes &amp; how to tighten it</li>
+  <li>Appendix: end-to-end data-flow trace</li>
+</ol>
+
+
+<h2>1 &nbsp; Executive summary &mdash; why the dot doesn't drift</h2>
+<p>The blue dot in Google Maps is positioned from <b>GNSS/GPS radio signals</b>
+fused with Wi-Fi and cell information. In a city those radio signals bounce off
+building faces ("urban-canyon multipath"), so the raw fix is routinely
+<b>5&ndash;20&nbsp;m off</b>. Maps hides some of that by <i>snapping</i> the dot to
+the nearest road centerline &mdash; which is precisely why it appears to jump from
+the sidewalk into the middle of the street.</p>
+
+<p>This app never asks the operating system where you are. Instead it turns on one
+capability &mdash; ARCore <b>Geospatial mode</b> &mdash; and reads position from a
+completely different source: <b>VPS, the Visual Positioning Service</b>. VPS looks
+through the phone's camera, matches what it sees against Google's global 3D model of
+the world (built from years of Street View imagery), and solves for where the camera
+physically is relative to that known geometry. That is a computer-vision pose
+estimate, not a radio triangulation, and in VPS-covered areas it delivers roughly
+<b>sub-meter horizontal accuracy and a few degrees of heading accuracy</b>.</p>
+
+<p>Everything else in the app &mdash; the moving map marker, the walking route, the
+"turn left in 5 meters", the "you are drifting to the right" warnings &mdash; is built
+on top of that one high-accuracy position/heading stream. The remainder of this
+document walks every stage of that pipeline, in source order, and explains the math.</p>
+
+<div class="callout">
+<b>The one-line answer.</b> It is not a better GPS algorithm. It is <i>not GPS at all</i>:
+camera-based visual localization against Google's Street-View-derived 3D map (ARCore
+Geospatial / VPS), fused with the phone's inertial sensors, which is inherently
+sub-meter where GPS is inherently several meters.
+</div>
+
+
+<h2>2 &nbsp; GPS vs. VPS: the root cause of the accuracy gap</h2>
+
+<table class="cmp">
+<tr><th></th><th>Google Maps blue dot (GPS)</th><th>This app (ARCore VPS)</th></tr>
+<tr><td>Primary signal</td><td>GNSS radio + Wi-Fi + cell</td><td>Camera imagery matched to a 3D world model</td></tr>
+<tr><td>Typical urban error</td><td>5&ndash;20&nbsp;m horizontal</td><td>&sim;0.5&ndash;1&nbsp;m horizontal</td></tr>
+<tr><td>Heading source</td><td>Magnetometer / inferred from motion</td><td>Visual pose + IMU, &sim;1&ndash;5&deg;</td></tr>
+<tr><td>Main failure mode</td><td>Multipath in "urban canyons"</td><td>No VPS coverage / featureless / dark scenes</td></tr>
+<tr><td>Cosmetic fix used</td><td>Snap-to-road (causes the street drift)</td><td>None needed &mdash; reports true position</td></tr>
+</table>
+
+<p>Because VPS derives position from <i>what the camera literally sees</i>, the reported
+latitude/longitude stays glued to the true physical location of the phone &mdash; on the
+sidewalk &mdash; and does not need road-snapping. That single difference is the entire
+"how is it doing that" the user asked about. The rest is engineering to make that stream
+usable for a walker (and specifically a blind walker).</p>
+
+
+<h2>3 &nbsp; System architecture</h2>
+<p>The app is a single <span class="mono">Activity</span> wiring together a handful of
+lifecycle-aware components. The diagram shows the flow of a position sample from the
+camera all the way to the user's ear.</p>
+
+<pre class="diagram">
+                    Camera frames + IMU
+                            |
+                            v
+             +------------------------------+
+             |   ARCore Session (VPS on)    |   ARCoreSessionLifecycleHelper
+             |   earth.cameraGeospatialPose |   configureSession()
+             +------------------------------+
+                            |  lat / lon / heading  (per frame, ~30 fps)
+                            v
+        +--------------------------------------------+
+        |            HelloGeoRenderer                |   onDrawFrame()
+        |  - circular moving average of heading      |
+        |  - throttle to once per ~second            |
+        +--------------------------------------------+
+           |                  |                    |
+           v                  v                    v
+   +---------------+  +-----------------+  +------------------+
+   |    MapView    |  | ArrowAlignedGuide|  |     useOCR()     |
+   | 2D marker +   |  | route geometry: |  | ML Kit text on   |
+   | camera follow |  | cross-track,    |  | live frame       |
+   +---------------+  | look-ahead,     |  +------------------+
+                      | turn detection  |
+                      +-----------------+
+                               |
+                               v
+                        +--------------+
+                        |  SpeechGuide |  Android TextToSpeech
+                        |  spoken cues |
+                        +--------------+
+
+   Routing (one-shot, on destination set):
+   destination text/voice --> Geoapify geocode --> Google Directions API
+     --> encoded polyline --> decodePoly() --> viewPointList (List&lt;LatLng&gt;)
+</pre>
+
+<p><b>Roles at a glance:</b></p>
+<ul>
+<li><span class="mono">HelloGeoActivity</span> &mdash; entry point; builds the components, enables Geospatial mode, wires speech-to-text for destination entry.</li>
+<li><span class="mono">ARCoreSessionLifecycleHelper</span> &mdash; creates/resumes/pauses/closes the ARCore session safely across the Android lifecycle.</li>
+<li><span class="mono">HelloGeoRenderer</span> &mdash; the heartbeat; runs every frame, reads the geospatial pose, smooths heading, drives the map and the guide.</li>
+<li><span class="mono">MapView</span> &mdash; the 2D Google Map: user marker, route polyline, camera that follows heading.</li>
+<li><span class="mono">ArrowAlignedGuide</span> &mdash; pure route geometry &amp; the spoken-turn state machine (no reliance on Google's turn text).</li>
+<li><span class="mono">SpeechGuide</span> &mdash; a thin, thread-safe wrapper over Android TextToSpeech tuned for navigation audio.</li>
+</ul>
+
+
+<h2>4 &nbsp; Enabling Geospatial mode &amp; the session lifecycle</h2>
+<p>Everything hinges on one configuration flag. Without it, <span class="mono">session.earth</span>
+is unavailable and there is no VPS position at all.</p>
+
+<div class="codecap">HelloGeoActivity.kt — the switch that turns on VPS</div>
+<pre class="code"><table class="codetbl">
+<tr><td class="ln">172</td><td class="cd">  <span class="kw">fun</span> configureSession(session: Session) {</td></tr>
+<tr><td class="ln">173</td><td class="cd"><span class="cm">    // TODO: Configure ARCore to use GeospatialMode.ENABLED.</span></td></tr>
+<tr><td class="ln">174</td><td class="cd">    session.configure(</td></tr>
+<tr><td class="ln">175</td><td class="cd">      session.config.apply {</td></tr>
+<tr><td class="ln">176</td><td class="cd"><span class="cm">        // Enable Geospatial Mode.</span></td></tr>
+<tr><td class="ln">177</td><td class="cd">        geospatialMode = Config.GeospatialMode.ENABLED</td></tr>
+<tr><td class="ln">178</td><td class="cd">      }</td></tr>
+<tr><td class="ln">179</td><td class="cd">    )</td></tr>
+<tr><td class="ln">180</td><td class="cd">  }</td></tr>
+</table></pre>
+
+<p><span class="mono">GeospatialMode.ENABLED</span> tells ARCore to start the VPS
+localization pipeline: it begins streaming visual features to Google's localization
+service and fusing the returned world-anchored pose with on-device visual-inertial
+odometry (SLAM). From that point on, <span class="mono">session.earth.cameraGeospatialPose</span>
+yields Earth-referenced latitude, longitude, altitude, and heading.</p>
+
+<p>This <span class="mono">configureSession</span> is registered as
+<span class="mono">beforeSessionResume</span> so it runs every time the session is
+about to resume &mdash; the lifecycle helper below guarantees a session exists and is
+configured before <span class="mono">resume()</span>.</p>
+
+<div class="codecap">ARCoreSessionLifecycleHelper.kt — safe creation &amp; resume</div>
+<pre class="code"><table class="codetbl">
+<tr><td class="ln">65</td><td class="cd">  <span class="kw">private</span> <span class="kw">fun</span> tryCreateSession(): Session? {</td></tr>
+<tr><td class="ln">66</td><td class="cd"><span class="cm">    // The app must have been given the CAMERA permission. If we don&#x27;t have it yet, request it.</span></td></tr>
+<tr><td class="ln">67</td><td class="cd">    <span class="kw">if</span> (!GeoPermissionsHelper.hasGeoPermissions(activity)) {</td></tr>
+<tr><td class="ln">68</td><td class="cd">      GeoPermissionsHelper.requestPermissions(activity)</td></tr>
+<tr><td class="ln">69</td><td class="cd">      <span class="kw">return</span> <span class="kw">null</span></td></tr>
+<tr><td class="ln">70</td><td class="cd">    }</td></tr>
+<tr><td class="ln">71</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">72</td><td class="cd">    <span class="kw">return</span> <span class="kw">try</span> {</td></tr>
+<tr><td class="ln">73</td><td class="cd"><span class="cm">      // Request installation if necessary.</span></td></tr>
+<tr><td class="ln">74</td><td class="cd">      <span class="kw">when</span> (ArCoreApk.getInstance().requestInstall(activity, !installRequested)!!) {</td></tr>
+<tr><td class="ln">75</td><td class="cd">        ArCoreApk.InstallStatus.INSTALL_REQUESTED -&gt; {</td></tr>
+<tr><td class="ln">76</td><td class="cd">          installRequested = <span class="kw">true</span></td></tr>
+<tr><td class="ln">77</td><td class="cd"><span class="cm">          // tryCreateSession will be called again, so we return null for now.</span></td></tr>
+<tr><td class="ln">78</td><td class="cd">          <span class="kw">return</span> <span class="kw">null</span></td></tr>
+<tr><td class="ln">79</td><td class="cd">        }</td></tr>
+<tr><td class="ln">80</td><td class="cd">        ArCoreApk.InstallStatus.INSTALLED -&gt; {</td></tr>
+<tr><td class="ln">81</td><td class="cd"><span class="cm">          // Left empty; nothing needs to be done.</span></td></tr>
+<tr><td class="ln">82</td><td class="cd">        }</td></tr>
+<tr><td class="ln">83</td><td class="cd">      }</td></tr>
+<tr><td class="ln">84</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">85</td><td class="cd"><span class="cm">      // Create a session if Google Play Services for AR is installed and up to date.</span></td></tr>
+<tr><td class="ln">86</td><td class="cd">      Session(activity, features)</td></tr>
+<tr><td class="ln">87</td><td class="cd">    } <span class="kw">catch</span> (e: Exception) {</td></tr>
+<tr><td class="ln">88</td><td class="cd">      exceptionCallback?.invoke(e)</td></tr>
+<tr><td class="ln">89</td><td class="cd">      <span class="kw">null</span></td></tr>
+<tr><td class="ln">90</td><td class="cd">    }</td></tr>
+<tr><td class="ln">91</td><td class="cd">  }</td></tr>
+<tr><td class="ln">92</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">93</td><td class="cd">  <span class="kw">override</span> <span class="kw">fun</span> onResume(owner: LifecycleOwner) {</td></tr>
+<tr><td class="ln">94</td><td class="cd">    <span class="kw">val</span> session = <span class="kw">this</span>.session ?: tryCreateSession() ?: <span class="kw">return</span></td></tr>
+<tr><td class="ln">95</td><td class="cd">    <span class="kw">try</span> {</td></tr>
+<tr><td class="ln">96</td><td class="cd">      beforeSessionResume?.invoke(session)</td></tr>
+<tr><td class="ln">97</td><td class="cd">      session.resume()</td></tr>
+<tr><td class="ln">98</td><td class="cd">      <span class="kw">this</span>.session = session</td></tr>
+<tr><td class="ln">99</td><td class="cd">    } <span class="kw">catch</span> (e: CameraNotAvailableException) {</td></tr>
+<tr><td class="ln">100</td><td class="cd">      exceptionCallback?.invoke(e)</td></tr>
+<tr><td class="ln">101</td><td class="cd">    }</td></tr>
+<tr><td class="ln">102</td><td class="cd">  }</td></tr>
+</table></pre>
+
+<p>Key correctness points here:</p>
+<ul>
+<li><b>Permission &amp; install gating.</b> <span class="mono">tryCreateSession()</span> returns
+<span class="mono">null</span> (no crash) if the CAMERA permission is missing or if Google Play
+Services for AR needs installing/updating; it is retried on the next resume once the user
+complies.</li>
+<li><b>Configure-then-resume ordering.</b> <span class="mono">beforeSessionResume?.invoke(session)</span>
+(which is <span class="mono">configureSession</span>) runs <i>before</i> <span class="mono">session.resume()</span>,
+so VPS is enabled the moment the camera starts.</li>
+<li><b>Deterministic teardown.</b> <span class="mono">onPause</span> pauses and
+<span class="mono">onDestroy</span> closes the session, releasing the camera and native VPS
+resources &mdash; important because the camera is a shared, exclusive device.</li>
+</ul>
+
+
+<h2>5 &nbsp; The per-frame render loop</h2>
+<p><span class="mono">onDrawFrame</span> is the app's heartbeat &mdash; ARCore calls it
+once per camera frame (~30&nbsp;fps, throttled to the camera rate because the session runs
+in blocking update mode). Each call advances the AR frame, then &mdash; only when the Earth
+subsystem is confidently <span class="mono">TRACKING</span> &mdash; reads a fresh geospatial
+pose and fans it out.</p>
+
+<div class="codecap">HelloGeoRenderer.kt — the geospatial branch of onDrawFrame</div>
+<pre class="code"><table class="codetbl">
+<tr><td class="ln">224</td><td class="cd">    <span class="kw">val</span> earth = session.earth</td></tr>
+<tr><td class="ln">225</td><td class="cd">    <span class="kw">if</span> (earth?.trackingState == TrackingState.TRACKING) {</td></tr>
+<tr><td class="ln">226</td><td class="cd">      <span class="kw">val</span> cameraGeospatialPose = earth.cameraGeospatialPose</td></tr>
+<tr><td class="ln">227</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">228</td><td class="cd">      headingValues.addLast(cameraGeospatialPose.heading)</td></tr>
+<tr><td class="ln">229</td><td class="cd">      avgHeading += cameraGeospatialPose.heading</td></tr>
+<tr><td class="ln">230</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">231</td><td class="cd">      <span class="kw">if</span>(headingValues.size &gt; oneSecond){</td></tr>
+<tr><td class="ln">232</td><td class="cd">        avgHeading -= headingValues.removeFirst()</td></tr>
+<tr><td class="ln">233</td><td class="cd">      }</td></tr>
+<tr><td class="ln">234</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">235</td><td class="cd">      <span class="kw">val</span> cosSum = headingValues.sumOf { cos(Math.toRadians(it)) }</td></tr>
+<tr><td class="ln">236</td><td class="cd">      <span class="kw">val</span> sinSum = headingValues.sumOf { sin(Math.toRadians(it)) }</td></tr>
+<tr><td class="ln">237</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">238</td><td class="cd">      <span class="kw">var</span> avgHeading = Math.toDegrees(atan2(sinSum / headingValues.size, cosSum / headingValues.size))</td></tr>
+<tr><td class="ln">239</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">240</td><td class="cd">      <span class="kw">if</span> (avgHeading &gt; 180) {</td></tr>
+<tr><td class="ln">241</td><td class="cd">        avgHeading -= 360.0</td></tr>
+<tr><td class="ln">242</td><td class="cd">      }</td></tr>
+<tr><td class="ln">243</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">244</td><td class="cd">      activity.view.mapView?.updateMapPosition(</td></tr>
+<tr><td class="ln">245</td><td class="cd">        latitude = cameraGeospatialPose.latitude,</td></tr>
+<tr><td class="ln">246</td><td class="cd">        longitude = cameraGeospatialPose.longitude,</td></tr>
+<tr><td class="ln">247</td><td class="cd">        heading = avgHeading,</td></tr>
+<tr><td class="ln">248</td><td class="cd">        isClick</td></tr>
+<tr><td class="ln">249</td><td class="cd">      )</td></tr>
+<tr><td class="ln">250</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">251</td><td class="cd">      <span class="kw">if</span>(activity.view.ocrIsOn){</td></tr>
+<tr><td class="ln">252</td><td class="cd">        useOCR(frame)</td></tr>
+<tr><td class="ln">253</td><td class="cd">      }</td></tr>
+<tr><td class="ln">254</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">255</td><td class="cd">      <span class="kw">if</span>(isClick &amp;&amp; curFrame++ == oneSecond){</td></tr>
+<tr><td class="ln">256</td><td class="cd">        <span class="kw">val</span> curLatlng = LatLng(cameraGeospatialPose.latitude, cameraGeospatialPose.longitude)</td></tr>
+<tr><td class="ln">257</td><td class="cd">        <span class="kw">val</span> path = activity.view.mapView?.viewPointList.orEmpty()</td></tr>
+<tr><td class="ln">258</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">259</td><td class="cd">        <span class="kw">if</span> (path.size &gt;= 2) {</td></tr>
+<tr><td class="ln">260</td><td class="cd">          <span class="kw">val</span> status = activity.navGuide.update(</td></tr>
+<tr><td class="ln">261</td><td class="cd">            user = curLatlng,</td></tr>
+<tr><td class="ln">262</td><td class="cd">            headingDeg = avgHeading,</td></tr>
+<tr><td class="ln">263</td><td class="cd">            path = path,</td></tr>
+<tr><td class="ln">264</td><td class="cd">          )</td></tr>
+<tr><td class="ln">265</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">266</td><td class="cd">          activity.runOnUiThread {</td></tr>
+<tr><td class="ln">267</td><td class="cd">            <span class="kw">if</span> (status != <span class="kw">null</span>) {</td></tr>
+<tr><td class="ln">268</td><td class="cd">              activity.view.distance_text.text = status.statusText</td></tr>
+<tr><td class="ln">269</td><td class="cd">              <span class="kw">if</span> (status.statusText == &quot;Arrived&quot; || status.distToDestMeters &lt; 1.5) {</td></tr>
+<tr><td class="ln">270</td><td class="cd">                Toast.makeText(activity, &quot;Arrived&quot;, Toast.LENGTH_LONG).show()</td></tr>
+<tr><td class="ln">271</td><td class="cd">                activity.reset()</td></tr>
+<tr><td class="ln">272</td><td class="cd">              } <span class="kw">else</span> <span class="kw">if</span> (!status.onRoute) {</td></tr>
+<tr><td class="ln">273</td><td class="cd">                showSnackbar(activity.findViewById(android.R.id.content), &quot;Veering off&quot;)</td></tr>
+<tr><td class="ln">274</td><td class="cd">              }</td></tr>
+<tr><td class="ln">275</td><td class="cd">            }</td></tr>
+<tr><td class="ln">276</td><td class="cd">          }</td></tr>
+<tr><td class="ln">277</td><td class="cd">        }</td></tr>
+<tr><td class="ln">278</td><td class="cd">        curFrame = 0</td></tr>
+<tr><td class="ln">279</td><td class="cd">      }</td></tr>
+<tr><td class="ln">280</td><td class="cd">    }</td></tr>
+</table></pre>
+
+<p>Walking through it:</p>
+<ul>
+<li><b>Gate on tracking (line 225).</b> Nothing downstream runs unless
+<span class="mono">earth.trackingState == TRACKING</span>. This is what prevents the app from
+ever acting on a low-confidence or not-yet-localized pose &mdash; the equivalent of Maps
+showing a "searching…" grey dot, but enforced in code.</li>
+<li><b>Read the pose (line 226).</b> <span class="mono">cameraGeospatialPose</span> is the VPS
+output: <span class="mono">.latitude</span>, <span class="mono">.longitude</span>,
+<span class="mono">.heading</span>, <span class="mono">.altitude</span>.</li>
+<li><b>Smooth the heading (lines 228&ndash;242).</b> Raw per-frame heading is jittery, so it is
+run through a circular moving average &mdash; detailed in the next section.</li>
+<li><b>Push to the map (line 244).</b> <span class="mono">updateMapPosition</span> moves the 2D
+marker and, when navigating, rotates the map to the walker's facing.</li>
+<li><b>Throttle the guidance (line 255).</b> <span class="mono">curFrame++ == oneSecond</span>
+(<span class="mono">oneSecond = 29</span>) fires the navigation update roughly once per second
+rather than every frame &mdash; guidance geometry and speech don't need 30&nbsp;Hz, and this
+keeps the spoken cues calm.</li>
+<li><b>Arrival &amp; off-route UX (lines 266&ndash;276).</b> On the UI thread it updates the
+status text, declares arrival under 1.5&nbsp;m, and surfaces a "Veering off" snackbar when the
+guide reports the walker has left the route corridor.</li>
+</ul>
+<div class="callout small">
+<b>Why gate everything on <span class="mono">TRACKING</span>?</b> A VPS pose that hasn't
+converged can be tens of meters wrong for a moment. By refusing to move the marker, speak, or
+evaluate the route until the state is <span class="mono">TRACKING</span>, the app trades a short
+startup delay for never emitting a confidently-wrong instruction to a blind user.
+</div>
+
+
+<h2>6 &nbsp; Heading fusion: the circular moving average</h2>
+<p>Heading is an <b>angle</b>, so you cannot average it arithmetically: the mean of
+359&deg; and 1&deg; is 180&deg; (pointing backwards) when the true answer is 0&deg;. The
+renderer solves this correctly by averaging the <i>unit vectors</i> of the recent headings
+and taking the resulting vector's angle &mdash; the standard "mean of circular quantities".</p>
+
+<div class="codecap">HelloGeoRenderer.kt — windowed circular mean of heading</div>
+<pre class="code"><table class="codetbl">
+<tr><td class="ln">228</td><td class="cd">      headingValues.addLast(cameraGeospatialPose.heading)</td></tr>
+<tr><td class="ln">229</td><td class="cd">      avgHeading += cameraGeospatialPose.heading</td></tr>
+<tr><td class="ln">230</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">231</td><td class="cd">      <span class="kw">if</span>(headingValues.size &gt; oneSecond){</td></tr>
+<tr><td class="ln">232</td><td class="cd">        avgHeading -= headingValues.removeFirst()</td></tr>
+<tr><td class="ln">233</td><td class="cd">      }</td></tr>
+<tr><td class="ln">234</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">235</td><td class="cd">      <span class="kw">val</span> cosSum = headingValues.sumOf { cos(Math.toRadians(it)) }</td></tr>
+<tr><td class="ln">236</td><td class="cd">      <span class="kw">val</span> sinSum = headingValues.sumOf { sin(Math.toRadians(it)) }</td></tr>
+<tr><td class="ln">237</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">238</td><td class="cd">      <span class="kw">var</span> avgHeading = Math.toDegrees(atan2(sinSum / headingValues.size, cosSum / headingValues.size))</td></tr>
+<tr><td class="ln">239</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">240</td><td class="cd">      <span class="kw">if</span> (avgHeading &gt; 180) {</td></tr>
+<tr><td class="ln">241</td><td class="cd">        avgHeading -= 360.0</td></tr>
+<tr><td class="ln">242</td><td class="cd">      }</td></tr>
+<tr><td class="ln">243</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">244</td><td class="cd">      activity.view.mapView?.updateMapPosition(</td></tr>
+<tr><td class="ln">245</td><td class="cd">        latitude = cameraGeospatialPose.latitude,</td></tr>
+<tr><td class="ln">246</td><td class="cd">        longitude = cameraGeospatialPose.longitude,</td></tr>
+<tr><td class="ln">247</td><td class="cd">        heading = avgHeading,</td></tr>
+<tr><td class="ln">248</td><td class="cd">        isClick</td></tr>
+<tr><td class="ln">249</td><td class="cd">      )</td></tr>
+</table></pre>
+
+<p>Mechanics:</p>
+<ul>
+<li><b>Sliding window.</b> <span class="mono">headingValues</span> is an
+<span class="mono">ArrayDeque</span> holding up to <span class="mono">oneSecond&nbsp;=&nbsp;29</span>
+recent samples (~1&nbsp;s at 30&nbsp;fps). Older samples are dropped from the front.</li>
+<li><b>Vector sum.</b> Each heading &theta; contributes
+(cos&nbsp;&theta;,&nbsp;sin&nbsp;&theta;); summing these and taking
+<span class="mono">atan2(&Sigma;sin, &Sigma;cos)</span> gives the average direction with no
+wraparound error.</li>
+<li><b>Normalize to &plusmn;180&deg;.</b> The result is folded into the range the map and guide
+expect (<span class="mono">if (avgHeading &gt; 180) avgHeading -= 360</span>).</li>
+</ul>
+<p>The net effect: a stable, low-lag facing direction. This matters more here than in a
+typical map app, because the <b>heading</b> &mdash; not just position &mdash; drives the
+spoken "turn left / turn right" instructions. A jittery heading would make the guide
+stutter contradictory turn cues; the smoothing is what makes the voice guidance trustworthy.</p>
+<div class="callout small">
+<b>Note.</b> There is a deliberate shadowing here: the running scalar
+<span class="mono">avgHeading</span> field is maintained but then a local
+<span class="mono">avgHeading</span> (the circular mean) is what's actually used and passed
+downstream. The circular-mean local is the correct value; the scalar accumulator is vestigial.
+</div>
+
+
+<h2>7 &nbsp; Drawing the position on the 2D map</h2>
+<p><span class="mono">updateMapPosition</span> receives the smoothed pose and reconciles it
+with the Google Map. It is careful not to fight the user's own map gestures.</p>
+
+<div class="codecap">MapView.kt — marker + heading-locked camera follow</div>
+<pre class="code"><table class="codetbl">
+<tr><td class="ln">141</td><td class="cd">  <span class="kw">fun</span> updateMapPosition(latitude: Double, longitude: Double, heading: Double, isClick: Boolean){</td></tr>
+<tr><td class="ln">142</td><td class="cd">    <span class="kw">val</span> position = LatLng(latitude, longitude)</td></tr>
+<tr><td class="ln">143</td><td class="cd">    activity.runOnUiThread {</td></tr>
+<tr><td class="ln">144</td><td class="cd"><span class="cm">      // If the map is already in the process of a camera update, then don&#x27;t move it.</span></td></tr>
+<tr><td class="ln">145</td><td class="cd">      <span class="kw">if</span> (!cameraIdle) {</td></tr>
+<tr><td class="ln">146</td><td class="cd">        <span class="kw">return</span>@runOnUiThread</td></tr>
+<tr><td class="ln">147</td><td class="cd">      }</td></tr>
+<tr><td class="ln">148</td><td class="cd">      cameraMarker.isVisible = <span class="kw">true</span></td></tr>
+<tr><td class="ln">149</td><td class="cd">      cameraMarker.position = position</td></tr>
+<tr><td class="ln">150</td><td class="cd">      cameraMarker.rotation = heading.toFloat()</td></tr>
+<tr><td class="ln">151</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">152</td><td class="cd">      <span class="kw">if</span>(setFirst){</td></tr>
+<tr><td class="ln">153</td><td class="cd">        <span class="kw">val</span> cameraPositionBuilder: CameraPosition.Builder = <span class="kw">if</span> (!setInitialCameraPosition) {</td></tr>
+<tr><td class="ln">154</td><td class="cd"><span class="cm">          // Set the camera position with an initial default zoom level.</span></td></tr>
+<tr><td class="ln">155</td><td class="cd">          setInitialCameraPosition = <span class="kw">true</span></td></tr>
+<tr><td class="ln">156</td><td class="cd">          CameraPosition.Builder().zoom(21f).target(position)</td></tr>
+<tr><td class="ln">157</td><td class="cd">        } <span class="kw">else</span> {</td></tr>
+<tr><td class="ln">158</td><td class="cd"><span class="cm">          // Set the camera position and keep the same zoom level.</span></td></tr>
+<tr><td class="ln">159</td><td class="cd">          CameraPosition.Builder()</td></tr>
+<tr><td class="ln">160</td><td class="cd">            .zoom(googleMap.cameraPosition.zoom)</td></tr>
+<tr><td class="ln">161</td><td class="cd">            .target(position)</td></tr>
+<tr><td class="ln">162</td><td class="cd">        }</td></tr>
+<tr><td class="ln">163</td><td class="cd">        googleMap.moveCamera(</td></tr>
+<tr><td class="ln">164</td><td class="cd">          CameraUpdateFactory.newCameraPosition(cameraPositionBuilder.build()))</td></tr>
+<tr><td class="ln">165</td><td class="cd">        setFirst = <span class="kw">false</span></td></tr>
+<tr><td class="ln">166</td><td class="cd">      }</td></tr>
+<tr><td class="ln">167</td><td class="cd">      <span class="kw">if</span>(isClick){</td></tr>
+<tr><td class="ln">168</td><td class="cd">        <span class="kw">val</span> adjustedHeading = <span class="kw">if</span> (heading &lt; 0) heading + 360 <span class="kw">else</span> heading</td></tr>
+<tr><td class="ln">169</td><td class="cd">        googleMap.moveCamera(</td></tr>
+<tr><td class="ln">170</td><td class="cd">          CameraUpdateFactory.newCameraPosition(</td></tr>
+<tr><td class="ln">171</td><td class="cd">            CameraPosition.Builder()</td></tr>
+<tr><td class="ln">172</td><td class="cd">              .target(position)</td></tr>
+<tr><td class="ln">173</td><td class="cd">              .zoom(googleMap.cameraPosition.zoom) // Set your preferred zoom level</td></tr>
+<tr><td class="ln">174</td><td class="cd">              .bearing(adjustedHeading.toFloat()) // Set the orientation of the camera to follow the user&#x27;s heading</td></tr>
+<tr><td class="ln">175</td><td class="cd">              .build()</td></tr>
+<tr><td class="ln">176</td><td class="cd">          )</td></tr>
+<tr><td class="ln">177</td><td class="cd">        )</td></tr>
+<tr><td class="ln">178</td><td class="cd">        googleMap.uiSettings.isCompassEnabled = <span class="kw">true</span></td></tr>
+<tr><td class="ln">179</td><td class="cd">      }<span class="kw">else</span>{</td></tr>
+<tr><td class="ln">180</td><td class="cd">        googleMap.uiSettings.isCompassEnabled = <span class="kw">false</span></td></tr>
+<tr><td class="ln">181</td><td class="cd">      }</td></tr>
+<tr><td class="ln">182</td><td class="cd">    }</td></tr>
+<tr><td class="ln">183</td><td class="cd">  }</td></tr>
+</table></pre>
+
+<ul>
+<li><b>Don't fight the user (line 145).</b> If the map camera is mid-move
+(<span class="mono">!cameraIdle</span>), the update returns early so a programmatic camera move
+doesn't yank the view while the user is panning.</li>
+<li><b>Marker is the true VPS position (lines 148&ndash;150).</b> The green navigation marker is
+placed at the VPS lat/lng and <i>rotated</i> to the smoothed heading &mdash; so the arrow points
+where the walker actually faces.</li>
+<li><b>First-fix framing (lines 152&ndash;166).</b> On the first sample it zooms in tight
+(<span class="mono">zoom(21f)</span> &mdash; building-level) and centers; afterward it preserves
+the user's chosen zoom.</li>
+<li><b>Heading-up navigation (lines 167&ndash;178).</b> Once a destination is set
+(<span class="mono">isClick</span>), the camera <span class="mono">bearing</span> is locked to the
+walker's heading, giving an egocentric "the world rotates around me" view and enabling the compass.
+The heading is wrapped to [0,360) for the Maps API.</li>
+</ul>
+
+
+<h2>8 &nbsp; The routing pipeline: destination &rarr; polyline</h2>
+<p>Routing is a one-shot operation triggered when the user sets a destination &mdash; either
+by tapping the map, or by typing/speaking a place name. The accuracy story is entirely on the
+<i>positioning</i> side; the route itself is a standard Google Directions walking route. Here is
+the tap path.</p>
+
+<div class="codecap">HelloGeoRenderer.kt — onMapClick: build the route &amp; anchor</div>
+<pre class="code"><table class="codetbl">
+<tr><td class="ln">411</td><td class="cd">  <span class="kw">fun</span> onMapClick(latLng: LatLng) {</td></tr>
+<tr><td class="ln">412</td><td class="cd">    viewPoints.clear()</td></tr>
+<tr><td class="ln">413</td><td class="cd">    activity.view.mapView?.eraseLines()</td></tr>
+<tr><td class="ln">414</td><td class="cd">    activity.navGuide.reset()</td></tr>
+<tr><td class="ln">415</td><td class="cd">    isClick = <span class="kw">false</span></td></tr>
+<tr><td class="ln">416</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">417</td><td class="cd"><span class="cm">    // To check the earth is available or not</span></td></tr>
+<tr><td class="ln">418</td><td class="cd">    <span class="kw">val</span> earth = session?.earth ?: <span class="kw">return</span></td></tr>
+<tr><td class="ln">419</td><td class="cd">    <span class="kw">if</span> (earth.trackingState != TrackingState.TRACKING) {</td></tr>
+<tr><td class="ln">420</td><td class="cd">      <span class="kw">return</span></td></tr>
+<tr><td class="ln">421</td><td class="cd">    }</td></tr>
+<tr><td class="ln">422</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">423</td><td class="cd"><span class="cm">    //if the tracking state is tracking then...</span></td></tr>
+<tr><td class="ln">424</td><td class="cd">    <span class="kw">if</span> (earth?.trackingState == TrackingState.TRACKING) {</td></tr>
+<tr><td class="ln">425</td><td class="cd">      <span class="kw">val</span> cameraGeospatialPose = earth.cameraGeospatialPose</td></tr>
+<tr><td class="ln">426</td><td class="cd">      <span class="kw">val</span> curLatitude = cameraGeospatialPose.latitude</td></tr>
+<tr><td class="ln">427</td><td class="cd">      <span class="kw">val</span> curLongitude = cameraGeospatialPose.longitude</td></tr>
+<tr><td class="ln">428</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">429</td><td class="cd">      <span class="kw">val</span> url:String = getDirectionsUrl(LatLng(curLatitude,curLongitude),latLng)!!</td></tr>
+<tr><td class="ln">430</td><td class="cd">      fetchJson(url) { stepList -&gt;</td></tr>
+<tr><td class="ln">431</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">432</td><td class="cd">        viewPoints = stepList.toMutableList()</td></tr>
+<tr><td class="ln">433</td><td class="cd">        activity.view.mapView?.erasePoints()</td></tr>
+<tr><td class="ln">434</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">435</td><td class="cd">        <span class="kw">for</span>(item <span class="kw">in</span> viewPoints){</td></tr>
+<tr><td class="ln">436</td><td class="cd">          <span class="kw">val</span> poly = decodePoly(item.polyline.points)</td></tr>
+<tr><td class="ln">437</td><td class="cd">          activity.view.mapView?.addViewPoints(poly)</td></tr>
+<tr><td class="ln">438</td><td class="cd">          activity.view.mapView?.addViewPointMarker(LatLng(item.end_location.lat,item.end_location.lng))</td></tr>
+<tr><td class="ln">439</td><td class="cd"><span class="cm">//          blueWaypoint.add(LatLng(item.end_location.lat,item.end_location.lng))</span></td></tr>
+<tr><td class="ln">440</td><td class="cd">        }</td></tr>
+<tr><td class="ln">441</td><td class="cd">        activity.view.mapView?.drawPolyline()</td></tr>
+<tr><td class="ln">442</td><td class="cd">        isClick = <span class="kw">true</span></td></tr>
+<tr><td class="ln">443</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">444</td><td class="cd">        <span class="kw">val</span> path = activity.view.mapView?.viewPointList.orEmpty()</td></tr>
+<tr><td class="ln">445</td><td class="cd">        <span class="kw">if</span> (path.size &gt;= 2) {</td></tr>
+<tr><td class="ln">446</td><td class="cd">          activity.navGuide.onRouteReady(</td></tr>
+<tr><td class="ln">447</td><td class="cd">            path = path,</td></tr>
+<tr><td class="ln">448</td><td class="cd">            user = LatLng(curLatitude, curLongitude),</td></tr>
+<tr><td class="ln">449</td><td class="cd">            headingDeg = cameraGeospatialPose.heading,</td></tr>
+<tr><td class="ln">450</td><td class="cd">          )</td></tr>
+<tr><td class="ln">451</td><td class="cd">        }</td></tr>
+<tr><td class="ln">452</td><td class="cd">      }</td></tr>
+<tr><td class="ln">453</td><td class="cd">    }</td></tr>
+<tr><td class="ln">454</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">455</td><td class="cd">    earthAnchor?.detach()</td></tr>
+<tr><td class="ln">456</td><td class="cd"><span class="cm">    // Place the earth anchor at the same altitude as that of the camera to make it easier to view.</span></td></tr>
+<tr><td class="ln">457</td><td class="cd">    <span class="kw">val</span> altitude = earth.cameraGeospatialPose.altitude - 1</td></tr>
+<tr><td class="ln">458</td><td class="cd"><span class="cm">    // The rotation quaternion of the anchor in the East-Up-South (EUS) coordinate system.</span></td></tr>
+<tr><td class="ln">459</td><td class="cd">    <span class="kw">val</span> qx = 0f</td></tr>
+<tr><td class="ln">460</td><td class="cd">    <span class="kw">val</span> qy = 0f</td></tr>
+<tr><td class="ln">461</td><td class="cd">    <span class="kw">val</span> qz = 0f</td></tr>
+<tr><td class="ln">462</td><td class="cd">    <span class="kw">val</span> qw = 1f</td></tr>
+<tr><td class="ln">463</td><td class="cd">    earthAnchor =</td></tr>
+<tr><td class="ln">464</td><td class="cd">      earth.createAnchor(latLng.latitude, latLng.longitude, altitude, qx, qy, qz, qw)</td></tr>
+<tr><td class="ln">465</td><td class="cd">    activity.view.mapView?.earthMarker?.apply {</td></tr>
+<tr><td class="ln">466</td><td class="cd">      position = latLng</td></tr>
+<tr><td class="ln">467</td><td class="cd">      isVisible = <span class="kw">true</span></td></tr>
+<tr><td class="ln">468</td><td class="cd">    }</td></tr>
+<tr><td class="ln">469</td><td class="cd">  }</td></tr>
+</table></pre>
+
+<p>Step by step:</p>
+<ul>
+<li><b>Origin = VPS position (lines 425&ndash;427).</b> The route's origin is the current
+<span class="mono">cameraGeospatialPose</span>, i.e. the sub-meter VPS fix &mdash; not a GPS fix.
+A precise origin is what lets the corridor math later be meaningful at a 3&ndash;5&nbsp;m scale.</li>
+<li><b>Ask Google Directions (lines 429&ndash;430).</b> <span class="mono">getDirectionsUrl</span>
+builds a walking-mode request; <span class="mono">fetchJson</span> executes it off the main thread.</li>
+<li><b>Decode &amp; store the path (lines 435&ndash;441).</b> Each step's encoded
+<span class="mono">polyline</span> is expanded to <span class="mono">LatLng</span> points and appended
+to <span class="mono">viewPointList</span>, then drawn as a red polyline.</li>
+<li><b>Hand the geometry to the guide (lines 444&ndash;451).</b> Once there are &ge;2 points,
+<span class="mono">navGuide.onRouteReady</span> primes the turn-by-turn state machine with the path
+and the current pose.</li>
+<li><b>Drop a world anchor (lines 455&ndash;464).</b> An ARCore <span class="mono">Earth</span> anchor
+is created at the destination lat/lng so the 3D marker is pinned to real-world geometry, tracked as
+ARCore refines its estimate.</li>
+</ul>
+<p>The request URL is deliberately simple &mdash; walking mode, JSON output:</p>
+
+<div class="codecap">HelloGeoRenderer.kt — Directions request builder</div>
+<pre class="code"><table class="codetbl">
+<tr><td class="ln">535</td><td class="cd">  <span class="kw">private</span> <span class="kw">fun</span> getDirectionsUrl(origin: LatLng, dest:LatLng):String?{</td></tr>
+<tr><td class="ln">536</td><td class="cd">    <span class="kw">val</span> stringOrigin = &quot;origin=&quot;+origin.latitude+&quot;,&quot;+origin.longitude</td></tr>
+<tr><td class="ln">537</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">538</td><td class="cd">    <span class="kw">val</span> stringDest = &quot;destination=&quot;+dest.latitude+&quot;,&quot;+dest.longitude</td></tr>
+<tr><td class="ln">539</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">540</td><td class="cd">    <span class="kw">val</span> mode = &quot;mode=walking&quot;</td></tr>
+<tr><td class="ln">541</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">542</td><td class="cd">    <span class="kw">val</span> parameters = &quot;$stringOrigin&amp;$stringDest&amp;$mode&quot;</td></tr>
+<tr><td class="ln">543</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">544</td><td class="cd">    <span class="kw">val</span> output = &quot;json&quot;</td></tr>
+<tr><td class="ln">545</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">546</td><td class="cd"><span class="cm">//   API key</span></td></tr>
+<tr><td class="ln">547</td><td class="cd">    <span class="kw">return</span> &quot;https://maps.googleapis.com/maps/api/directions/$output?$parameters&amp;waypoints&amp;key=REDACTED&quot;</td></tr>
+<tr><td class="ln">548</td><td class="cd">  }</td></tr>
+</table></pre>
+
+<p>The typed/spoken path (in <span class="mono">HelloGeoView</span>) adds a geocoding hop: it
+reverse-geocodes the current VPS position to a postcode (Geoapify), then forward-geocodes the
+spoken place name constrained to a 5&nbsp;km circle around the user, and finally calls the same
+<span class="mono">onMapClick</span> with the resolved coordinate.</p>
+
+<div class="codecap">HelloGeoView.kt — destination submit (voice/text)</div>
+<pre class="code"><table class="codetbl">
+<tr><td class="ln">79</td><td class="cd">  <span class="kw">fun</span> setOnClickListener(){</td></tr>
+<tr><td class="ln">80</td><td class="cd">    submitButton.setOnClickListener {</td></tr>
+<tr><td class="ln">81</td><td class="cd">      <span class="kw">val</span> placeName = editText.text.toString()</td></tr>
+<tr><td class="ln">82</td><td class="cd">      <span class="kw">val</span> earth = session?.earth ?: <span class="kw">return</span>@setOnClickListener</td></tr>
+<tr><td class="ln">83</td><td class="cd">      <span class="kw">if</span> (placeName.isNotEmpty()) {</td></tr>
+<tr><td class="ln">84</td><td class="cd">        <span class="kw">val</span> cameraGeospatialPose = earth.cameraGeospatialPose</td></tr>
+<tr><td class="ln">85</td><td class="cd">        <span class="kw">val</span> curLatitude = cameraGeospatialPose.latitude</td></tr>
+<tr><td class="ln">86</td><td class="cd">        <span class="kw">val</span> curLongitude = cameraGeospatialPose.longitude</td></tr>
+<tr><td class="ln">87</td><td class="cd">        <span class="kw">val</span> client = OkHttpClient().newBuilder()</td></tr>
+<tr><td class="ln">88</td><td class="cd">          .build()</td></tr>
+<tr><td class="ln">89</td><td class="cd"><span class="cm">        //   API key</span></td></tr>
+<tr><td class="ln">90</td><td class="cd">        <span class="kw">val</span> postcodeUrl = &quot;https://api.geoapify.com/v1/geocode/reverse?lat=$curLatitude&amp;lon=$curLongitude&amp;format=json&amp;apiKey=REDACTED&quot;</td></tr>
+<tr><td class="ln">91</td><td class="cd">        Log.i(TAG, &quot;setOnClickListener: $postcodeUrl&quot;)</td></tr>
+<tr><td class="ln">92</td><td class="cd">        getPostCode(postcodeUrl){ postcode-&gt;</td></tr>
+<tr><td class="ln">93</td><td class="cd">          getGeocoding(LatLng(curLatitude,curLongitude),placeName,postcode){ latLng-&gt;</td></tr>
+<tr><td class="ln">94</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">95</td><td class="cd">            activity.renderer.onMapClick(latLng)</td></tr>
+<tr><td class="ln">96</td><td class="cd">          }</td></tr>
+<tr><td class="ln">97</td><td class="cd">        }</td></tr>
+<tr><td class="ln">98</td><td class="cd">      }</td></tr>
+<tr><td class="ln">99</td><td class="cd">    }</td></tr>
+<tr><td class="ln">100</td><td class="cd">    ocrButton.setOnClickListener{</td></tr>
+<tr><td class="ln">101</td><td class="cd">      ocrIsOn = !ocrIsOn</td></tr>
+<tr><td class="ln">102</td><td class="cd">      <span class="kw">if</span> (ocrIsOn) {</td></tr>
+<tr><td class="ln">103</td><td class="cd">        ocrButton.text = &quot;OCR ON&quot;</td></tr>
+<tr><td class="ln">104</td><td class="cd">        ocrButton.setBackgroundResource(R.color.red)</td></tr>
+<tr><td class="ln">105</td><td class="cd">      } <span class="kw">else</span> {</td></tr>
+<tr><td class="ln">106</td><td class="cd">        ocrButton.text = &quot;OCR OFF&quot;</td></tr>
+<tr><td class="ln">107</td><td class="cd">        ocrButton.setBackgroundResource(R.color.blue)</td></tr>
+<tr><td class="ln">108</td><td class="cd">      }</td></tr>
+<tr><td class="ln">109</td><td class="cd">    }</td></tr>
+<tr><td class="ln">110</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">111</td><td class="cd">  }</td></tr>
+</table></pre>
+
+<h2>9 &nbsp; Polyline decoding</h2>
+<p>Google returns each route step's geometry as an <b>encoded polyline</b> &mdash; a compact
+ASCII string. <span class="mono">decodePoly</span> is the standard Google algorithm: it reads
+variable-length, zig-zag-encoded, 5-decimal-place deltas and reconstructs the
+<span class="mono">LatLng</span> vertices.</p>
+
+<div class="codecap">HelloGeoRenderer.kt — encoded-polyline decoder</div>
+<pre class="code"><table class="codetbl">
+<tr><td class="ln">502</td><td class="cd">  <span class="kw">private</span> <span class="kw">fun</span> decodePoly(encoded: String): List&lt;LatLng&gt; {</td></tr>
+<tr><td class="ln">503</td><td class="cd">    <span class="kw">val</span> poly = ArrayList&lt;LatLng&gt;()</td></tr>
+<tr><td class="ln">504</td><td class="cd">    <span class="kw">var</span> index = 0</td></tr>
+<tr><td class="ln">505</td><td class="cd">    <span class="kw">val</span> len = encoded.length</td></tr>
+<tr><td class="ln">506</td><td class="cd">    <span class="kw">var</span> lat = 0</td></tr>
+<tr><td class="ln">507</td><td class="cd">    <span class="kw">var</span> lng = 0</td></tr>
+<tr><td class="ln">508</td><td class="cd">    <span class="kw">while</span> (index &lt; len) {</td></tr>
+<tr><td class="ln">509</td><td class="cd">      <span class="kw">var</span> b: Int</td></tr>
+<tr><td class="ln">510</td><td class="cd">      <span class="kw">var</span> shift = 0</td></tr>
+<tr><td class="ln">511</td><td class="cd">      <span class="kw">var</span> result = 0</td></tr>
+<tr><td class="ln">512</td><td class="cd">      <span class="kw">do</span> {</td></tr>
+<tr><td class="ln">513</td><td class="cd">        b = encoded[index++].toInt() - 63</td></tr>
+<tr><td class="ln">514</td><td class="cd">        result = result or (b and 0x1f shl shift)</td></tr>
+<tr><td class="ln">515</td><td class="cd">        shift += 5</td></tr>
+<tr><td class="ln">516</td><td class="cd">      } <span class="kw">while</span> (b &gt;= 0x20)</td></tr>
+<tr><td class="ln">517</td><td class="cd">      <span class="kw">val</span> dlat = <span class="kw">if</span> (result and 1 != 0) (result shr 1).inv() <span class="kw">else</span> result shr 1</td></tr>
+<tr><td class="ln">518</td><td class="cd">      lat += dlat</td></tr>
+<tr><td class="ln">519</td><td class="cd">      shift = 0</td></tr>
+<tr><td class="ln">520</td><td class="cd">      result = 0</td></tr>
+<tr><td class="ln">521</td><td class="cd">      <span class="kw">do</span> {</td></tr>
+<tr><td class="ln">522</td><td class="cd">        b = encoded[index++].toInt() - 63</td></tr>
+<tr><td class="ln">523</td><td class="cd">        result = result or (b and 0x1f shl shift)</td></tr>
+<tr><td class="ln">524</td><td class="cd">        shift += 5</td></tr>
+<tr><td class="ln">525</td><td class="cd">      } <span class="kw">while</span> (b &gt;= 0x20)</td></tr>
+<tr><td class="ln">526</td><td class="cd">      <span class="kw">val</span> dlng = <span class="kw">if</span> (result and 1 != 0) (result shr 1).inv() <span class="kw">else</span> result shr 1</td></tr>
+<tr><td class="ln">527</td><td class="cd">      lng += dlng</td></tr>
+<tr><td class="ln">528</td><td class="cd">      <span class="kw">val</span> p = LatLng(lat.toDouble() / 1E5,</td></tr>
+<tr><td class="ln">529</td><td class="cd">        lng.toDouble() / 1E5)</td></tr>
+<tr><td class="ln">530</td><td class="cd">      poly.add(p)</td></tr>
+<tr><td class="ln">531</td><td class="cd">    }</td></tr>
+<tr><td class="ln">532</td><td class="cd">    <span class="kw">return</span> poly</td></tr>
+<tr><td class="ln">533</td><td class="cd">  }</td></tr>
+</table></pre>
+
+<p>For each coordinate it accumulates 5-bit groups until the continuation bit clears, undoes the
+zig-zag (<span class="mono">(result shr 1).inv()</span> for negatives), scales by 1e-5, and adds the
+delta to the running lat/lng. These vertices become the corridor centerline the guidance geometry
+measures against.</p>
+
+
+<h2>10 &nbsp; Route geometry &amp; on-route detection (the distance algorithm)</h2>
+<p>This is the heart of "am I still on the sidewalk path?" Given the precise VPS position and the
+decoded route, the app computes the walker's <b>perpendicular (cross-track) distance</b> to the
+nearest route segment and compares it against a tolerance. Because the position is sub-meter, the
+tolerance can be a tight few meters &mdash; impossible with GPS noise.</p>
+
+<div class="codecap">HelloGeoRenderer.kt — isInRoute: nearest-segment corridor test</div>
+<pre class="code"><table class="codetbl">
+<tr><td class="ln">363</td><td class="cd">  <span class="kw">private</span> <span class="kw">fun</span> isInRoute(i1: List&lt;LatLng&gt;, curPosition: LatLng): Boolean {</td></tr>
+<tr><td class="ln">364</td><td class="cd"><span class="cm">    // Iterate over each pair of points in the list</span></td></tr>
+<tr><td class="ln">365</td><td class="cd">    <span class="kw">var</span> minD = 90.00</td></tr>
+<tr><td class="ln">366</td><td class="cd">    <span class="kw">for</span> (i <span class="kw">in</span> 0 until i1.size - 1) {</td></tr>
+<tr><td class="ln">367</td><td class="cd">        <span class="kw">val</span> start = i1[i]</td></tr>
+<tr><td class="ln">368</td><td class="cd">        <span class="kw">val</span> end = i1[i + 1]</td></tr>
+<tr><td class="ln">369</td><td class="cd">        <span class="kw">var</span> distance = 100.0</td></tr>
+<tr><td class="ln">370</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">371</td><td class="cd">        <span class="kw">var</span> startToCur = getDistanceBetween(start,curPosition)</td></tr>
+<tr><td class="ln">372</td><td class="cd">        <span class="kw">var</span> endToCur = getDistanceBetween(end,curPosition)</td></tr>
+<tr><td class="ln">373</td><td class="cd">        <span class="kw">var</span> startToEnd = getDistanceBetween(start,end)</td></tr>
+<tr><td class="ln">374</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">375</td><td class="cd">        <span class="kw">val</span> angleA = findAngle(startToEnd, endToCur, startToCur) // start 的角度</td></tr>
+<tr><td class="ln">376</td><td class="cd">        <span class="kw">val</span> angleB = findAngle(startToEnd, startToCur, endToCur) // end 的角度</td></tr>
+<tr><td class="ln">377</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">378</td><td class="cd">        <span class="kw">if</span>(angleA&lt; PI/2 &amp;&amp; angleB&lt;PI/2){</td></tr>
+<tr><td class="ln">379</td><td class="cd">          distance = distanceFromPointToLine(startToCur, endToCur, startToEnd)</td></tr>
+<tr><td class="ln">380</td><td class="cd">          minD = min(minD,distance)</td></tr>
+<tr><td class="ln">381</td><td class="cd">          <span class="kw">if</span> (minD &lt;= FIX_DISTANCE &amp;&amp; !minD.isNaN()) {</td></tr>
+<tr><td class="ln">382</td><td class="cd">            minDis = (minD * 100.0).roundToInt() / 100.0</td></tr>
+<tr><td class="ln">383</td><td class="cd">            <span class="kw">return</span> <span class="kw">true</span></td></tr>
+<tr><td class="ln">384</td><td class="cd">          }</td></tr>
+<tr><td class="ln">385</td><td class="cd">        }</td></tr>
+<tr><td class="ln">386</td><td class="cd">    }</td></tr>
+<tr><td class="ln">387</td><td class="cd">    minDis = (minD*100.0).roundToInt() / 100.0</td></tr>
+<tr><td class="ln">388</td><td class="cd">    <span class="kw">return</span> <span class="kw">false</span></td></tr>
+<tr><td class="ln">389</td><td class="cd">  }</td></tr>
+</table></pre>
+
+<p>For every consecutive pair of route points it forms a triangle between the segment endpoints and
+the walker, and uses the triangle's geometry to get the perpendicular distance:</p>
+
+<div class="codecap">HelloGeoRenderer.kt — distanceFromPointToLine (Heron&#x27;s formula)</div>
+<pre class="code"><table class="codetbl">
+<tr><td class="ln">346</td><td class="cd">  <span class="kw">private</span> <span class="kw">fun</span> distanceFromPointToLine(startToCur: Double, endToCur: Double, startToEnd: Double): Double {</td></tr>
+<tr><td class="ln">347</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">348</td><td class="cd">    <span class="kw">if</span>(startToCur&lt;FIX_DISTANCE*1.2 &amp;&amp; endToCur&lt;FIX_DISTANCE*1.2){</td></tr>
+<tr><td class="ln">349</td><td class="cd">      <span class="kw">return</span> startToCur</td></tr>
+<tr><td class="ln">350</td><td class="cd">    }</td></tr>
+<tr><td class="ln">351</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">352</td><td class="cd">    <span class="kw">return</span> <span class="kw">if</span>(startToCur+endToCur &lt;= startToEnd){// 如果起点到当前点的距离加上终点到当前点的距离小于等于 起点到终点返回 0</td></tr>
+<tr><td class="ln">353</td><td class="cd">      0.0</td></tr>
+<tr><td class="ln">354</td><td class="cd">    }<span class="kw">else</span>{</td></tr>
+<tr><td class="ln">355</td><td class="cd">      <span class="kw">var</span> p = (startToEnd + startToCur + endToCur) / 2</td></tr>
+<tr><td class="ln">356</td><td class="cd">      <span class="kw">var</span> q = max(p * (p - startToEnd) * (p - startToCur) * (p - endToCur),0.0)</td></tr>
+<tr><td class="ln">357</td><td class="cd">      <span class="kw">var</span> s = sqrt(q)</td></tr>
+<tr><td class="ln">358</td><td class="cd">      <span class="kw">return</span> 2 * s / startToEnd</td></tr>
+<tr><td class="ln">359</td><td class="cd">    }</td></tr>
+<tr><td class="ln">360</td><td class="cd">  }</td></tr>
+</table></pre>
+
+<p>The math, decoded:</p>
+<ul>
+<li><b>Near-vertex short-circuit (line 348).</b> If the walker is within
+<span class="mono">FIX_DISTANCE&times;1.2</span> of <i>both</i> endpoints, just return the
+start-to-current distance &mdash; near a waypoint the perpendicular is meaningless.</li>
+<li><b>Projection falls outside the segment (line 352).</b> If
+<span class="mono">startToCur + endToCur &le; startToEnd</span> (degenerate/collinear-beyond case) it
+returns 0.</li>
+<li><b>Heron's formula (lines 355&ndash;358).</b> Otherwise it computes the triangle area from the
+three side lengths via the semi-perimeter <span class="mono">p</span>, then
+<span class="mono">perpendicular = 2&middot;area / base</span>, where the base is the route segment
+<span class="mono">startToEnd</span>. That perpendicular <i>is</i> the cross-track distance.</li>
+</ul>
+<p>The <span class="mono">isInRoute</span> wrapper additionally guards with the two base angles
+(<span class="mono">angleA</span>, <span class="mono">angleB</span>): only when both are acute is the
+foot of the perpendicular actually on the segment, so the perpendicular distance is valid. It keeps
+the minimum across all segments and declares "on route" when that minimum is within
+<span class="mono">FIX_DISTANCE (3&nbsp;m)</span>. The great-circle distance between any two coordinates
+uses the spherical law of cosines:</p>
+
+<div class="codecap">HelloGeoRenderer.kt — great-circle distance (meters)</div>
+<pre class="code"><table class="codetbl">
+<tr><td class="ln">569</td><td class="cd">  <span class="kw">private</span> <span class="kw">fun</span> getDistanceBetween(curPosition: LatLng, waypoint: LatLng): Double{</td></tr>
+<tr><td class="ln">570</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">571</td><td class="cd">    <span class="kw">val</span> la1= rad(curPosition.latitude)</td></tr>
+<tr><td class="ln">572</td><td class="cd">    <span class="kw">val</span> lo1= rad(curPosition.longitude)</td></tr>
+<tr><td class="ln">573</td><td class="cd">    <span class="kw">val</span> la2= rad(waypoint.latitude)</td></tr>
+<tr><td class="ln">574</td><td class="cd">    <span class="kw">val</span> lo2= rad(waypoint.longitude)</td></tr>
+<tr><td class="ln">575</td><td class="cd">    <span class="kw">val</span> d = 6367 * acos(cos(la1) * cos(la2) * cos(lo2-lo1) + sin(la1) * sin(la2))</td></tr>
+<tr><td class="ln">576</td><td class="cd">    <span class="kw">return</span> d*1000</td></tr>
+<tr><td class="ln">577</td><td class="cd">  }</td></tr>
+<tr><td class="ln">578</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">579</td><td class="cd">  <span class="kw">private</span> <span class="kw">fun</span> rad(d:Double): Double{</td></tr>
+<tr><td class="ln">580</td><td class="cd">    <span class="kw">return</span> d*Math.PI/180.0</td></tr>
+<tr><td class="ln">581</td><td class="cd">  }</td></tr>
+</table></pre>
+
+<p>(<span class="mono">6367</span> is Earth's radius in km; the result is scaled to meters.) The same
+formula appears, hardened with a <span class="mono">coerceIn(-1.0, 1.0)</span> domain clamp, inside
+<span class="mono">ArrowAlignedGuide</span> &mdash; the clamp prevents <span class="mono">acos</span> from
+returning <span class="mono">NaN</span> on tiny floating-point overshoots for near-zero distances.</p>
+
+
+<h2>11 &nbsp; Turn-by-turn guidance geometry</h2>
+<p><span class="mono">ArrowAlignedGuide</span> is a self-contained module that converts
+(position, heading, path) into human instructions. Notably it <b>ignores Google's turn text</b>
+and derives turns purely from geometry &mdash; so guidance stays correct even when the walker is
+between the coarse waypoints Google provides. Its tuning constants define the whole behavior:</p>
+
+<div class="codecap">ArrowAlignedGuide.kt — corridor &amp; turn tuning</div>
+<pre class="code"><table class="codetbl">
+<tr><td class="ln">17</td><td class="cd"><span class="kw">class</span> ArrowAlignedGuide(</td></tr>
+<tr><td class="ln">18</td><td class="cd">  <span class="kw">private</span> <span class="kw">val</span> speech: SpeechGuide,</td></tr>
+<tr><td class="ln">19</td><td class="cd">  <span class="kw">private</span> <span class="kw">val</span> corridorMeters: Double = 5.0,</td></tr>
+<tr><td class="ln">20</td><td class="cd">  <span class="kw">private</span> <span class="kw">val</span> lookAheadMeters: Double = 12.0,</td></tr>
+<tr><td class="ln">21</td><td class="cd">  <span class="kw">private</span> <span class="kw">val</span> periodicIntervalMs: Long = 10_000L,</td></tr>
+<tr><td class="ln">22</td><td class="cd">  <span class="kw">private</span> <span class="kw">val</span> deviationIntervalMs: Long = 5_000L,</td></tr>
+<tr><td class="ln">23</td><td class="cd">) {</td></tr>
+<tr><td class="ln">24</td><td class="cd">  <span class="kw">companion</span> <span class="kw">object</span> {</td></tr>
+<tr><td class="ln">25</td><td class="cd">    <span class="kw">private</span> <span class="kw">val</span> TURN_THRESHOLDS_M = listOf(15, 10, 5)</td></tr>
+<tr><td class="ln">26</td><td class="cd">    <span class="kw">private</span> <span class="kw">const</span> <span class="kw">val</span> TURN_NOW_M = 2.5</td></tr>
+<tr><td class="ln">27</td><td class="cd">    <span class="kw">private</span> <span class="kw">const</span> <span class="kw">val</span> WAYPOINT_ADVANCE_M = 4.0</td></tr>
+<tr><td class="ln">28</td><td class="cd">    <span class="kw">private</span> <span class="kw">const</span> <span class="kw">val</span> STRAIGHT_DEG = 20.0</td></tr>
+<tr><td class="ln">29</td><td class="cd">    <span class="kw">private</span> <span class="kw">const</span> <span class="kw">val</span> TURN_HINT_DEG = 35.0</td></tr>
+<tr><td class="ln">30</td><td class="cd">  }</td></tr>
+</table></pre>
+
+<p>When a route is set, it snaps to the nearest segment and speaks an initial summary:</p>
+
+<div class="codecap">ArrowAlignedGuide.kt — onRouteReady</div>
+<pre class="code"><table class="codetbl">
+<tr><td class="ln">61</td><td class="cd">  <span class="kw">fun</span> onRouteReady(path: List&lt;LatLng&gt;, user: LatLng, headingDeg: Double) {</td></tr>
+<tr><td class="ln">62</td><td class="cd">    reset()</td></tr>
+<tr><td class="ln">63</td><td class="cd">    <span class="kw">if</span> (path.size &lt; 2) <span class="kw">return</span></td></tr>
+<tr><td class="ln">64</td><td class="cd">    segmentIndex = nearestSegmentIndex(path, user)</td></tr>
+<tr><td class="ln">65</td><td class="cd">    routeStarted = <span class="kw">true</span></td></tr>
+<tr><td class="ln">66</td><td class="cd">    <span class="kw">val</span> dest = path.last()</td></tr>
+<tr><td class="ln">67</td><td class="cd">    <span class="kw">val</span> distDest = distanceMeters(user, dest)</td></tr>
+<tr><td class="ln">68</td><td class="cd">    <span class="kw">val</span> bearingDest = absoluteBearingDeg(user, dest)</td></tr>
+<tr><td class="ln">69</td><td class="cd">    <span class="kw">val</span> lookAhead = lookAheadPoint(path, user, segmentIndex, lookAheadMeters)</td></tr>
+<tr><td class="ln">70</td><td class="cd">    <span class="kw">val</span> rel = relativeBearingDeg(headingDeg, absoluteBearingDeg(user, lookAhead))</td></tr>
+<tr><td class="ln">71</td><td class="cd">    <span class="kw">val</span> turnPhrase = turnInstruction(rel, includeDegrees = <span class="kw">true</span>)</td></tr>
+<tr><td class="ln">72</td><td class="cd">    speech.speak(</td></tr>
+<tr><td class="ln">73</td><td class="cd">      &quot;Route set. Destination ${metersSpoken(distDest)} away, bearing ${bearingDest.roundToInt()} degrees. $turnPhrase&quot;,</td></tr>
+<tr><td class="ln">74</td><td class="cd">      flush = <span class="kw">true</span></td></tr>
+<tr><td class="ln">75</td><td class="cd">    )</td></tr>
+<tr><td class="ln">76</td><td class="cd">    lastPeriodicSpeakMs = System.currentTimeMillis()</td></tr>
+<tr><td class="ln">77</td><td class="cd">  }</td></tr>
+</table></pre>
+
+<p>Then, once per second, <span class="mono">update</span> recomputes the full situational picture:</p>
+
+<div class="codecap">ArrowAlignedGuide.kt — per-tick update</div>
+<pre class="code"><table class="codetbl">
+<tr><td class="ln">79</td><td class="cd">  <span class="kw">fun</span> update(user: LatLng, headingDeg: Double, path: List&lt;LatLng&gt;, nowMs: Long = System.currentTimeMillis()): Status? {</td></tr>
+<tr><td class="ln">80</td><td class="cd">    <span class="kw">if</span> (!routeStarted || path.size &lt; 2) <span class="kw">return</span> <span class="kw">null</span></td></tr>
+<tr><td class="ln">81</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">82</td><td class="cd">    advanceSegment(path, user)</td></tr>
+<tr><td class="ln">83</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">84</td><td class="cd">    <span class="kw">val</span> dest = path.last()</td></tr>
+<tr><td class="ln">85</td><td class="cd">    <span class="kw">val</span> lookAhead = lookAheadPoint(path, user, segmentIndex, lookAheadMeters)</td></tr>
+<tr><td class="ln">86</td><td class="cd">    <span class="kw">val</span> distNext = distanceMeters(user, lookAhead)</td></tr>
+<tr><td class="ln">87</td><td class="cd">    <span class="kw">val</span> distDest = distanceMeters(user, dest)</td></tr>
+<tr><td class="ln">88</td><td class="cd">    <span class="kw">val</span> bearingDest = absoluteBearingDeg(user, dest)</td></tr>
+<tr><td class="ln">89</td><td class="cd">    <span class="kw">val</span> bearingPath = absoluteBearingDeg(user, lookAhead)</td></tr>
+<tr><td class="ln">90</td><td class="cd">    <span class="kw">val</span> relPath = relativeBearingDeg(headingDeg, bearingPath)</td></tr>
+<tr><td class="ln">91</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">92</td><td class="cd">    <span class="kw">val</span> (segStart, segEnd) = currentSegment(path)</td></tr>
+<tr><td class="ln">93</td><td class="cd">    <span class="kw">val</span> crossTrack = crossTrackDistanceMeters(user, segStart, segEnd)</td></tr>
+<tr><td class="ln">94</td><td class="cd">    <span class="kw">val</span> onRoute = crossTrack &lt;= corridorMeters &amp;&amp; isAlongsideSegment(user, segStart, segEnd)</td></tr>
+<tr><td class="ln">95</td><td class="cd">    <span class="kw">val</span> sideLeft = isLeftOfSegment(user, segStart, segEnd)</td></tr>
+<tr><td class="ln">96</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">97</td><td class="cd">    <span class="kw">if</span> (distDest &lt; 1.5) {</td></tr>
+<tr><td class="ln">98</td><td class="cd">      speech.speak(&quot;Arrived at destination.&quot;, flush = <span class="kw">true</span>)</td></tr>
+<tr><td class="ln">99</td><td class="cd">      <span class="kw">return</span> Status(</td></tr>
+<tr><td class="ln">100</td><td class="cd">        statusText = &quot;Arrived&quot;,</td></tr>
+<tr><td class="ln">101</td><td class="cd">        crossTrackMeters = crossTrack,</td></tr>
+<tr><td class="ln">102</td><td class="cd">        distToNextMeters = distNext,</td></tr>
+<tr><td class="ln">103</td><td class="cd">        distToDestMeters = distDest,</td></tr>
+<tr><td class="ln">104</td><td class="cd">        destBearingDeg = bearingDest,</td></tr>
+<tr><td class="ln">105</td><td class="cd">        relativeToPathDeg = relPath,</td></tr>
+<tr><td class="ln">106</td><td class="cd">        onRoute = <span class="kw">true</span>,</td></tr>
+<tr><td class="ln">107</td><td class="cd">      )</td></tr>
+<tr><td class="ln">108</td><td class="cd">    }</td></tr>
+<tr><td class="ln">109</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">110</td><td class="cd">    <span class="kw">if</span> (!onRoute) {</td></tr>
+<tr><td class="ln">111</td><td class="cd">      offRouteStreak++</td></tr>
+<tr><td class="ln">112</td><td class="cd">      <span class="kw">if</span> (offRouteStreak &gt;= 2 &amp;&amp; nowMs - lastDeviationSpeakMs &gt;= deviationIntervalMs) {</td></tr>
+<tr><td class="ln">113</td><td class="cd">        <span class="kw">val</span> side = <span class="kw">if</span> (sideLeft) &quot;left&quot; <span class="kw">else</span> &quot;right&quot;</td></tr>
+<tr><td class="ln">114</td><td class="cd">        speech.speak(&quot;You are drifting to the $side of the path.&quot;, flush = <span class="kw">true</span>)</td></tr>
+<tr><td class="ln">115</td><td class="cd">        lastDeviationSpeakMs = nowMs</td></tr>
+<tr><td class="ln">116</td><td class="cd">      }</td></tr>
+<tr><td class="ln">117</td><td class="cd">    } <span class="kw">else</span> {</td></tr>
+<tr><td class="ln">118</td><td class="cd">      offRouteStreak = 0</td></tr>
+<tr><td class="ln">119</td><td class="cd">      announceTurnThresholds(relPath, distNext)</td></tr>
+<tr><td class="ln">120</td><td class="cd">    }</td></tr>
+<tr><td class="ln">121</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">122</td><td class="cd">    <span class="kw">if</span> (nowMs - lastPeriodicSpeakMs &gt;= periodicIntervalMs) {</td></tr>
+<tr><td class="ln">123</td><td class="cd">      <span class="kw">val</span> face = turnInstruction(relPath, includeDegrees = <span class="kw">true</span>)</td></tr>
+<tr><td class="ln">124</td><td class="cd">      speech.speak(</td></tr>
+<tr><td class="ln">125</td><td class="cd">        &quot;Next waypoint ${metersSpoken(distNext)}. &quot; +</td></tr>
+<tr><td class="ln">126</td><td class="cd">          &quot;Destination bearing ${bearingDest.roundToInt()} degrees, ${metersSpoken(distDest)}. &quot; +</td></tr>
+<tr><td class="ln">127</td><td class="cd">          face</td></tr>
+<tr><td class="ln">128</td><td class="cd">      )</td></tr>
+<tr><td class="ln">129</td><td class="cd">      lastPeriodicSpeakMs = nowMs</td></tr>
+<tr><td class="ln">130</td><td class="cd">    }</td></tr>
+</table></pre>
+
+<p>The important geometric primitives it composes:</p>
+<ul>
+<li><b>Absolute bearing (lines 272&ndash;280).</b> The compass bearing from the walker to a target
+point &mdash; standard <span class="mono">atan2</span> forward-azimuth formula, normalized to [0,360).</li>
+<li><b>Relative bearing (lines 268&ndash;270).</b> Target bearing minus current heading, normalized to
+[-180,180]: positive means "the path is to your right", negative "to your left". This single signed
+number becomes "turn left/right".</li>
+<li><b>Look-ahead point (lines 198&ndash;221).</b> Rather than aim at the next raw vertex, it walks
+<span class="mono">lookAheadMeters (12&nbsp;m)</span> forward along the polyline from the walker's
+projected position and aims there &mdash; giving smooth "continue straight / gentle right" cues instead
+of snapping at each vertex.</li>
+<li><b>Cross-track &amp; side (lines 323&ndash;361).</b> The same Heron's-formula perpendicular as above,
+plus a 2D cross-product sign test (<span class="mono">isLeftOfSegment</span>) to say whether the drift is
+to the left or right &mdash; which is what powers "you are drifting to the right of the path."</li>
+</ul>
+
+<div class="codecap">ArrowAlignedGuide.kt — bearing primitives</div>
+<pre class="code"><table class="codetbl">
+<tr><td class="ln">268</td><td class="cd">  <span class="kw">fun</span> relativeBearingDeg(headingDeg: Double, targetBearingDeg: Double): Double {</td></tr>
+<tr><td class="ln">269</td><td class="cd">    <span class="kw">return</span> normalize180(targetBearingDeg - headingDeg)</td></tr>
+<tr><td class="ln">270</td><td class="cd">  }</td></tr>
+<tr><td class="ln">271</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">272</td><td class="cd">  <span class="kw">fun</span> absoluteBearingDeg(from: LatLng, to: LatLng): Double {</td></tr>
+<tr><td class="ln">273</td><td class="cd">    <span class="kw">val</span> lonDiff = Math.toRadians(to.longitude - from.longitude)</td></tr>
+<tr><td class="ln">274</td><td class="cd">    <span class="kw">val</span> lat1 = Math.toRadians(from.latitude)</td></tr>
+<tr><td class="ln">275</td><td class="cd">    <span class="kw">val</span> lat2 = Math.toRadians(to.latitude)</td></tr>
+<tr><td class="ln">276</td><td class="cd">    <span class="kw">val</span> y = sin(lonDiff) * cos(lat2)</td></tr>
+<tr><td class="ln">277</td><td class="cd">    <span class="kw">val</span> x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(lonDiff)</td></tr>
+<tr><td class="ln">278</td><td class="cd">    <span class="kw">val</span> bearing = Math.toDegrees(atan2(y, x))</td></tr>
+<tr><td class="ln">279</td><td class="cd">    <span class="kw">return</span> (bearing + 360.0) % 360.0</td></tr>
+<tr><td class="ln">280</td><td class="cd">  }</td></tr>
+<tr><td class="ln">281</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">282</td><td class="cd">  <span class="kw">fun</span> distanceMeters(a: LatLng, b: LatLng): Double {</td></tr>
+<tr><td class="ln">283</td><td class="cd">    <span class="kw">val</span> la1 = Math.toRadians(a.latitude)</td></tr>
+<tr><td class="ln">284</td><td class="cd">    <span class="kw">val</span> lo1 = Math.toRadians(a.longitude)</td></tr>
+<tr><td class="ln">285</td><td class="cd">    <span class="kw">val</span> la2 = Math.toRadians(b.latitude)</td></tr>
+<tr><td class="ln">286</td><td class="cd">    <span class="kw">val</span> lo2 = Math.toRadians(b.longitude)</td></tr>
+<tr><td class="ln">287</td><td class="cd">    <span class="kw">val</span> d = 6367.0 * acos(</td></tr>
+<tr><td class="ln">288</td><td class="cd">      (cos(la1) * cos(la2) * cos(lo2 - lo1) + sin(la1) * sin(la2)).coerceIn(-1.0, 1.0)</td></tr>
+<tr><td class="ln">289</td><td class="cd">    )</td></tr>
+<tr><td class="ln">290</td><td class="cd">    <span class="kw">return</span> d * 1000.0</td></tr>
+<tr><td class="ln">291</td><td class="cd">  }</td></tr>
+</table></pre>
+
+<p>Finally, the countdown state machine turns geometry into speech without nagging:</p>
+
+<div class="codecap">ArrowAlignedGuide.kt — announceTurnThresholds</div>
+<pre class="code"><table class="codetbl">
+<tr><td class="ln">150</td><td class="cd">  <span class="kw">private</span> <span class="kw">fun</span> announceTurnThresholds(relPath: Double, distNext: Double) {</td></tr>
+<tr><td class="ln">151</td><td class="cd"><span class="cm">    // New look-ahead after passing a bend: reset thresholds when distance jumps up.</span></td></tr>
+<tr><td class="ln">152</td><td class="cd">    <span class="kw">if</span> (distNext &gt; (TURN_THRESHOLDS_M.maxOrNull() ?: 15) + 5) {</td></tr>
+<tr><td class="ln">153</td><td class="cd">      announcedThresholds.clear()</td></tr>
+<tr><td class="ln">154</td><td class="cd">      announcedTurnNow = <span class="kw">false</span></td></tr>
+<tr><td class="ln">155</td><td class="cd">    }</td></tr>
+<tr><td class="ln">156</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">157</td><td class="cd">    <span class="kw">val</span> absRel = kotlin.math.abs(relPath)</td></tr>
+<tr><td class="ln">158</td><td class="cd"><span class="cm">    // Only countdown turns when the path meaningfully differs from facing.</span></td></tr>
+<tr><td class="ln">159</td><td class="cd">    <span class="kw">if</span> (absRel &lt; TURN_HINT_DEG) {</td></tr>
+<tr><td class="ln">160</td><td class="cd">      <span class="kw">return</span></td></tr>
+<tr><td class="ln">161</td><td class="cd">    }</td></tr>
+<tr><td class="ln">162</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">163</td><td class="cd">    <span class="kw">for</span> (threshold <span class="kw">in</span> TURN_THRESHOLDS_M) {</td></tr>
+<tr><td class="ln">164</td><td class="cd">      <span class="kw">if</span> (distNext &lt;= threshold &amp;&amp; threshold !<span class="kw">in</span> announcedThresholds) {</td></tr>
+<tr><td class="ln">165</td><td class="cd">        announcedThresholds.add(threshold)</td></tr>
+<tr><td class="ln">166</td><td class="cd"><span class="cm">        // Skip higher unused thresholds if we entered mid-band.</span></td></tr>
+<tr><td class="ln">167</td><td class="cd">        announcedThresholds.addAll(TURN_THRESHOLDS_M.filter { it &gt; threshold })</td></tr>
+<tr><td class="ln">168</td><td class="cd">        <span class="kw">val</span> dir = <span class="kw">if</span> (relPath &gt; 0) &quot;right&quot; <span class="kw">else</span> &quot;left&quot;</td></tr>
+<tr><td class="ln">169</td><td class="cd">        speech.speak(&quot;Turn $dir <span class="kw">in</span> $threshold meters.&quot;)</td></tr>
+<tr><td class="ln">170</td><td class="cd">      }</td></tr>
+<tr><td class="ln">171</td><td class="cd">    }</td></tr>
+<tr><td class="ln">172</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">173</td><td class="cd">    <span class="kw">if</span> (distNext &lt;= TURN_NOW_M &amp;&amp; !announcedTurnNow) {</td></tr>
+<tr><td class="ln">174</td><td class="cd">      announcedTurnNow = <span class="kw">true</span></td></tr>
+<tr><td class="ln">175</td><td class="cd">      <span class="kw">val</span> dir = <span class="kw">if</span> (relPath &gt; 0) &quot;right&quot; <span class="kw">else</span> &quot;left&quot;</td></tr>
+<tr><td class="ln">176</td><td class="cd">      speech.speak(&quot;Turn $dir now.&quot;, flush = <span class="kw">true</span>)</td></tr>
+<tr><td class="ln">177</td><td class="cd">    }</td></tr>
+<tr><td class="ln">178</td><td class="cd">  }</td></tr>
+</table></pre>
+
+<ul>
+<li><b>Only for real turns (line 159).</b> Countdowns fire only when the upcoming path differs from the
+current facing by more than <span class="mono">TURN_HINT_DEG (35&deg;)</span>.</li>
+<li><b>Debounced thresholds (lines 163&ndash;171).</b> It announces "turn in 15/10/5 meters" at most once
+each, and marks higher thresholds consumed if the walker enters mid-band &mdash; so it never repeats or
+counts up.</li>
+<li><b>Final commit (lines 173&ndash;177).</b> Within <span class="mono">TURN_NOW_M (2.5&nbsp;m)</span> it
+flushes a "turn left/right now."</li>
+<li><b>Deviation &amp; periodic cues</b> (in <span class="mono">update</span>) are separately rate-limited
+(<span class="mono">deviationIntervalMs = 5&nbsp;s</span>, <span class="mono">periodicIntervalMs = 10&nbsp;s</span>)
+and only trigger deviation warnings after a 2-tick off-route streak to avoid false alarms from a single
+noisy sample.</li>
+</ul>
+
+
+<h2>12 &nbsp; Spoken guidance (SpeechGuide / TTS)</h2>
+<p>For a blind-navigation app the audio channel is the product. <span class="mono">SpeechGuide</span>
+is a small, thread-safe wrapper over Android <span class="mono">TextToSpeech</span> tuned for the job.</p>
+
+<div class="codecap">SpeechGuide.kt — navigation-tuned TTS</div>
+<pre class="code"><table class="codetbl">
+<tr><td class="ln">14</td><td class="cd"><span class="kw">class</span> SpeechGuide(context: Context) : TextToSpeech.OnInitListener {</td></tr>
+<tr><td class="ln">15</td><td class="cd">  <span class="kw">companion</span> <span class="kw">object</span> {</td></tr>
+<tr><td class="ln">16</td><td class="cd">    <span class="kw">private</span> <span class="kw">const</span> <span class="kw">val</span> TAG = &quot;SpeechGuide&quot;</td></tr>
+<tr><td class="ln">17</td><td class="cd">  }</td></tr>
+<tr><td class="ln">18</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">19</td><td class="cd">  <span class="kw">private</span> <span class="kw">val</span> tts = TextToSpeech(context.applicationContext, <span class="kw">this</span>)</td></tr>
+<tr><td class="ln">20</td><td class="cd">  @Volatile <span class="kw">private</span> <span class="kw">var</span> ready = <span class="kw">false</span></td></tr>
+<tr><td class="ln">21</td><td class="cd">  @Volatile <span class="kw">private</span> <span class="kw">var</span> speaking = <span class="kw">false</span></td></tr>
+<tr><td class="ln">22</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">23</td><td class="cd">  <span class="kw">override</span> <span class="kw">fun</span> onInit(status: Int) {</td></tr>
+<tr><td class="ln">24</td><td class="cd">    <span class="kw">if</span> (status != TextToSpeech.SUCCESS) {</td></tr>
+<tr><td class="ln">25</td><td class="cd">      Log.e(TAG, &quot;TTS <span class="kw">init</span> failed: $status&quot;)</td></tr>
+<tr><td class="ln">26</td><td class="cd">      ready = <span class="kw">false</span></td></tr>
+<tr><td class="ln">27</td><td class="cd">      <span class="kw">return</span></td></tr>
+<tr><td class="ln">28</td><td class="cd">    }</td></tr>
+<tr><td class="ln">29</td><td class="cd">    <span class="kw">val</span> result = tts.setLanguage(Locale.US)</td></tr>
+<tr><td class="ln">30</td><td class="cd">    <span class="kw">if</span> (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {</td></tr>
+<tr><td class="ln">31</td><td class="cd">      tts.language = Locale.getDefault()</td></tr>
+<tr><td class="ln">32</td><td class="cd">    }</td></tr>
+<tr><td class="ln">33</td><td class="cd">    tts.setSpeechRate(0.92f)</td></tr>
+<tr><td class="ln">34</td><td class="cd">    tts.setAudioAttributes(</td></tr>
+<tr><td class="ln">35</td><td class="cd">      AudioAttributes.Builder()</td></tr>
+<tr><td class="ln">36</td><td class="cd">        .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)</td></tr>
+<tr><td class="ln">37</td><td class="cd">        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)</td></tr>
+<tr><td class="ln">38</td><td class="cd">        .build()</td></tr>
+<tr><td class="ln">39</td><td class="cd">    )</td></tr>
+<tr><td class="ln">40</td><td class="cd">    tts.setOnUtteranceProgressListener(<span class="kw">object</span> : UtteranceProgressListener() {</td></tr>
+<tr><td class="ln">41</td><td class="cd">      <span class="kw">override</span> <span class="kw">fun</span> onStart(utteranceId: String?) {</td></tr>
+<tr><td class="ln">42</td><td class="cd">        speaking = <span class="kw">true</span></td></tr>
+<tr><td class="ln">43</td><td class="cd">      }</td></tr>
+<tr><td class="ln">44</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">45</td><td class="cd">      <span class="kw">override</span> <span class="kw">fun</span> onDone(utteranceId: String?) {</td></tr>
+<tr><td class="ln">46</td><td class="cd">        speaking = <span class="kw">false</span></td></tr>
+<tr><td class="ln">47</td><td class="cd">      }</td></tr>
+<tr><td class="ln">48</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">49</td><td class="cd">      @Deprecated(&quot;Deprecated <span class="kw">in</span> Java&quot;)</td></tr>
+<tr><td class="ln">50</td><td class="cd">      <span class="kw">override</span> <span class="kw">fun</span> onError(utteranceId: String?) {</td></tr>
+<tr><td class="ln">51</td><td class="cd">        speaking = <span class="kw">false</span></td></tr>
+<tr><td class="ln">52</td><td class="cd">      }</td></tr>
+<tr><td class="ln">53</td><td class="cd">    })</td></tr>
+<tr><td class="ln">54</td><td class="cd">    ready = <span class="kw">true</span></td></tr>
+<tr><td class="ln">55</td><td class="cd">  }</td></tr>
+<tr><td class="ln">56</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">57</td><td class="cd">  <span class="kw">fun</span> isSpeaking(): Boolean = speaking</td></tr>
+<tr><td class="ln">58</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">59</td><td class="cd">  <span class="kw">fun</span> speak(text: String, flush: Boolean = <span class="kw">false</span>) {</td></tr>
+<tr><td class="ln">60</td><td class="cd">    <span class="kw">if</span> (!ready || text.isBlank()) <span class="kw">return</span></td></tr>
+<tr><td class="ln">61</td><td class="cd">    <span class="kw">val</span> mode = <span class="kw">if</span> (flush) TextToSpeech.QUEUE_FLUSH <span class="kw">else</span> TextToSpeech.QUEUE_ADD</td></tr>
+<tr><td class="ln">62</td><td class="cd">    <span class="kw">val</span> params = Bundle()</td></tr>
+<tr><td class="ln">63</td><td class="cd">    tts.speak(text, mode, params, &quot;nav-${System.nanoTime()}&quot;)</td></tr>
+<tr><td class="ln">64</td><td class="cd">  }</td></tr>
+<tr><td class="ln">65</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">66</td><td class="cd">  <span class="kw">fun</span> stop() {</td></tr>
+<tr><td class="ln">67</td><td class="cd">    <span class="kw">if</span> (ready) tts.stop()</td></tr>
+<tr><td class="ln">68</td><td class="cd">    speaking = <span class="kw">false</span></td></tr>
+<tr><td class="ln">69</td><td class="cd">  }</td></tr>
+<tr><td class="ln">70</td><td class="cd">&nbsp;</td></tr>
+<tr><td class="ln">71</td><td class="cd">  <span class="kw">fun</span> shutdown() {</td></tr>
+<tr><td class="ln">72</td><td class="cd">    ready = <span class="kw">false</span></td></tr>
+<tr><td class="ln">73</td><td class="cd">    speaking = <span class="kw">false</span></td></tr>
+<tr><td class="ln">74</td><td class="cd">    tts.stop()</td></tr>
+<tr><td class="ln">75</td><td class="cd">    tts.shutdown()</td></tr>
+<tr><td class="ln">76</td><td class="cd">  }</td></tr>
+<tr><td class="ln">77</td><td class="cd">}</td></tr>
+</table></pre>
+
+<ul>
+<li><b>Navigation audio routing (lines 34&ndash;39).</b> It sets
+<span class="mono">USAGE_ASSISTANCE_NAVIGATION_GUIDANCE</span> so the OS ducks other audio (music,
+podcasts) for cues instead of talking over them &mdash; and routes through the navigation audio focus.</li>
+<li><b>Slightly slowed rate (line 33).</b> <span class="mono">0.92&times;</span> speech rate for clarity
+while walking.</li>
+<li><b>Flush vs. queue (lines 59&ndash;64).</b> Urgent cues ("turn now", "drifting") pass
+<span class="mono">flush = true</span> &rarr; <span class="mono">QUEUE_FLUSH</span>, interrupting stale
+speech; routine cues append with <span class="mono">QUEUE_ADD</span>.</li>
+<li><b>Readiness &amp; speaking flags (@Volatile).</b> Guards prevent speaking before TTS init completes
+and track whether audio is currently playing, across threads.</li>
+</ul>
+
+
+<h2>13 &nbsp; The OCR side-channel</h2>
+<p>Independent of navigation, an optional OCR mode runs Google ML Kit text recognition on the live
+camera frame &mdash; e.g. to confirm a door number or sign matches the destination. It is a toggle so it
+never competes with the navigation compute path unless the user asks for it.</p>
+
+<div class="codecap">HelloGeoRenderer.kt — useOCR: ML Kit on the AR frame</div>
+<pre class="code"><table class="codetbl">
+<tr><td class="ln">312</td><td class="cd">  <span class="kw">private</span> <span class="kw">fun</span> useOCR(frame: Frame){</td></tr>
+<tr><td class="ln">313</td><td class="cd">    <span class="kw">try</span> {</td></tr>
+<tr><td class="ln">314</td><td class="cd">      <span class="kw">val</span> curImage = frame.acquireCameraImage()</td></tr>
+<tr><td class="ln">315</td><td class="cd">      <span class="kw">val</span> recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)</td></tr>
+<tr><td class="ln">316</td><td class="cd">      <span class="kw">val</span> result = recognizer.process(curImage,0)</td></tr>
+<tr><td class="ln">317</td><td class="cd">        .addOnSuccessListener { visionText -&gt;</td></tr>
+<tr><td class="ln">318</td><td class="cd">          <span class="kw">var</span> resultText = visionText.text</td></tr>
+<tr><td class="ln">319</td><td class="cd"><span class="cm">//          Log.i(TAG, &quot;useOCR: resultText $resultText&quot;)</span></td></tr>
+<tr><td class="ln">320</td><td class="cd">          resultText = resultText.lowercase()</td></tr>
+<tr><td class="ln">321</td><td class="cd">          <span class="kw">val</span> addString = activity.view.editText.text.toString()</td></tr>
+<tr><td class="ln">322</td><td class="cd">          <span class="kw">if</span>(addString != <span class="kw">null</span> &amp;&amp; addString != &quot;&quot;){</td></tr>
+<tr><td class="ln">323</td><td class="cd">            <span class="kw">val</span> charArray= addString.split(&quot; &quot;)</td></tr>
+<tr><td class="ln">324</td><td class="cd"><span class="cm">//            Log.i(TAG, &quot;useOCR: resultText ${charArray.toString()}&quot;)</span></td></tr>
+<tr><td class="ln">325</td><td class="cd">            <span class="kw">for</span>(i <span class="kw">in</span> charArray){</td></tr>
+<tr><td class="ln">326</td><td class="cd">              <span class="kw">if</span>(resultText.contains(i.lowercase())){</td></tr>
+<tr><td class="ln">327</td><td class="cd"><span class="cm">//                Log.i(TAG, &quot;useOCR:++++++ $i Find&quot;)</span></td></tr>
+<tr><td class="ln">328</td><td class="cd">                showSnackbar(activity.findViewById(android.R.id.content), &quot;Find!!&quot;)</td></tr>
+<tr><td class="ln">329</td><td class="cd"><span class="cm">//                activity.view.find_text.text = String.format(&quot;find&quot;)</span></td></tr>
+<tr><td class="ln">330</td><td class="cd">              }</td></tr>
+<tr><td class="ln">331</td><td class="cd">            }</td></tr>
+<tr><td class="ln">332</td><td class="cd">          }</td></tr>
+<tr><td class="ln">333</td><td class="cd">          curImage.close()</td></tr>
+<tr><td class="ln">334</td><td class="cd">        }</td></tr>
+<tr><td class="ln">335</td><td class="cd">        .addOnFailureListener { e -&gt;</td></tr>
+<tr><td class="ln">336</td><td class="cd">          Log.e(TAG, &quot;onDrawFrame: $e&quot;, )</td></tr>
+<tr><td class="ln">337</td><td class="cd">        }</td></tr>
+<tr><td class="ln">338</td><td class="cd">    }<span class="kw">catch</span> (e: NotYetAvailableException){</td></tr>
+<tr><td class="ln">339</td><td class="cd">      Log.e(TAG, &quot;onDrawFrame: $e&quot;, )</td></tr>
+<tr><td class="ln">340</td><td class="cd">    }<span class="kw">catch</span> (e:ResourceExhaustedException){</td></tr>
+<tr><td class="ln">341</td><td class="cd">      Log.e(TAG, &quot;onDrawFrame: $e&quot;, )</td></tr>
+<tr><td class="ln">342</td><td class="cd">    }</td></tr>
+<tr><td class="ln">343</td><td class="cd">  }</td></tr>
+</table></pre>
+
+<p>It acquires the current camera image, runs the on-device Latin text recognizer, lowercases the
+result, and checks whether any word of the target string appears &mdash; announcing "Find!!" on a match.
+Exceptions for frames that aren't ready yet (<span class="mono">NotYetAvailableException</span>) or
+resource pressure are swallowed so OCR never destabilizes the render loop.</p>
+
+
+<h2>14 &nbsp; Accuracy budget, failure modes &amp; how to tighten it</h2>
+<p><b>Why the end-to-end result is sub-meter:</b></p>
+<ul>
+<li>VPS gives a &sim;0.5&ndash;1&nbsp;m position and few-degree heading in covered areas.</li>
+<li>The <span class="mono">TRACKING</span> gate discards low-confidence poses entirely.</li>
+<li>Circular-mean heading smoothing removes per-frame jitter without adding meaningful lag.</li>
+<li>A precise VPS origin makes the 3&nbsp;m corridor test and 12&nbsp;m look-ahead physically meaningful.</li>
+</ul>
+<p><b>Known limitations / failure modes:</b></p>
+<ul>
+<li><b>Coverage.</b> VPS needs Street-View-mapped surroundings and a camera pointed at the world.
+Indoors, tunnels, dark or featureless scenes degrade or lose the fix.</li>
+<li><b>Battery/compute.</b> Continuous camera + CV + TTS is heavier than a passive GPS read.</li>
+<li><b>Accuracy is not consulted.</b> The code reads <span class="mono">cameraGeospatialPose</span> but never
+checks <span class="mono">horizontalAccuracy</span> / <span class="mono">headingAccuracy</span>. It trusts any
+<span class="mono">TRACKING</span> pose equally.</li>
+</ul>
+<div class="callout">
+<b>Concrete hardening opportunities.</b>
+<ol>
+<li><b>Reject low-confidence fixes.</b> Skip the map/guide update (or soften cues) when
+<span class="mono">cameraGeospatialPose.horizontalAccuracy</span> exceeds, say, 2&nbsp;m, instead of trusting
+every <span class="mono">TRACKING</span> sample.</li>
+<li><b>Remove the vestigial scalar <span class="mono">avgHeading</span> accumulator</b> in the renderer to
+avoid confusion; the circular-mean local is the value actually used.</li>
+<li><b>Move the hard-coded API keys</b> (Directions, Geoapify) out of source into a secrets/config file &mdash;
+they are currently checked into the repository.</li>
+<li><b>Consider gating on <span class="mono">headingAccuracy</span></b> before speaking turn cues, since heading
+drives the left/right decision.</li>
+</ol>
+</div>
+
+
+<h2>15 &nbsp; Appendix: end-to-end data-flow trace</h2>
+<p>One position sample, from photons to speech:</p>
+<pre class="diagram">
+1.  Camera frame + IMU delivered to ARCore session (VPS enabled).
+2.  ARCore localizes visually against Google's 3D world model
+       -> earth.cameraGeospatialPose { lat, lon, heading, accuracy }.
+3.  onDrawFrame gate: proceed only if earth.trackingState == TRACKING.
+4.  Heading pushed into 29-sample deque; circular mean computed
+       avgHeading = atan2(Sigma sin theta, Sigma cos theta), folded to +/-180.
+5.  MapView.updateMapPosition: green marker to (lat,lon), rotated to
+       avgHeading; camera bearing locked to heading when navigating.
+6.  Once per ~second (curFrame == 29) and if a route is set:
+       ArrowAlignedGuide.update(user=(lat,lon), heading=avgHeading, path):
+         a. advanceSegment  -> current route segment index
+         b. lookAheadPoint  -> aim 12 m ahead along the polyline
+         c. relativeBearing -> signed angle: +right / -left
+         d. crossTrack (Heron) + isLeftOfSegment -> on-route? which side?
+         e. announceTurnThresholds -> "turn left in 5 meters" (debounced)
+7.  SpeechGuide.speak(...) -> Android TTS, nav-guidance audio usage,
+       flush for urgent cues, queue for routine cues.
+8.  UI thread: status text updated; "Arrived" under 1.5 m; "Veering off"
+       snackbar when off-route.
+</pre>
+<p class="fin">The accuracy the user noticed comes entirely from stage&nbsp;2 &mdash; visual
+localization replacing GPS. Stages&nbsp;3&ndash;8 are the engineering that turns that precise,
+stable pose into trustworthy spoken walking guidance.</p>
+
+</body></html>
