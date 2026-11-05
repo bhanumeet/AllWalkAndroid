@@ -4,3 +4,4 @@
 sdk.dir=/path/to/Android/sdk
 MAPS_API_KEY=
 GEOAPIFY_API_KEY=
+OPENAI_API_KEY=

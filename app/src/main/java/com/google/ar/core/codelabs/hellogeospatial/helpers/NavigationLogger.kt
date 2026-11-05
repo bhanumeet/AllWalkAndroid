@@ -1,6 +1,10 @@
 package com.google.ar.core.codelabs.hellogeospatial.helpers
 
+import android.content.ContentValues
 import android.content.Context
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.util.Log
 import com.google.android.gms.maps.model.LatLng
 import java.io.File
@@ -12,14 +16,14 @@ import java.util.concurrent.CopyOnWriteArrayList
 /**
  * Navigation drift log:
  * - Full planned path coordinates once at route start
- * - User position every [userSampleIntervalMs] (default 15s)
+ * - User position every [userSampleIntervalMs] (default 1s)
  * - TTS / buffer / lifecycle events for context
  */
 class NavigationLogger(context: Context) {
   companion object {
     private const val TAG = "NavigationLogger"
     private const val DIR_NAME = "nav_logs"
-    const val USER_SAMPLE_INTERVAL_MS = 15_000L
+    const val USER_SAMPLE_INTERVAL_MS = 1_000L
   }
 
   private val appContext = context.applicationContext
@@ -34,6 +38,9 @@ class NavigationLogger(context: Context) {
   private val walkPoints = mutableListOf<LatLng>()
   private val waypointPoints = mutableListOf<LatLng>()
   private val vpsPoints = mutableListOf<LatLng>()
+  /** Spoken cue with where the user was when it played. */
+  private data class Cue(val time: String, val lat: Double?, val lng: Double?, val text: String)
+  private val cues = mutableListOf<Cue>()
   @Volatile var lastLat: Double? = null
     private set
   @Volatile var lastLng: Double? = null
@@ -42,6 +49,8 @@ class NavigationLogger(context: Context) {
     private set
 
   private var lastUserSampleMs = 0L
+  /** Destination search text. Saved logs are named after it. */
+  @Volatile var logTitle: String = ""
   private var userSampleIndex = 0
 
   init {
@@ -129,7 +138,7 @@ class NavigationLogger(context: Context) {
   }
 
   /**
-   * Records user pose at most once every 15 seconds (unless [force]).
+   * Records user pose at most once a second (unless [force]).
    * Use these rows with PATH rows to compute drift offline.
    */
   fun logUserSample(
@@ -160,6 +169,10 @@ class NavigationLogger(context: Context) {
   }
 
   fun logTts(text: String, flush: Boolean = false) {
+    synchronized(lock) {
+      cues.add(Cue(timeFormat.format(Date()), lastLat, lastLng, text))
+      writeTableLocked()
+    }
     log(
       "TTS",
       text,
@@ -220,6 +233,7 @@ class NavigationLogger(context: Context) {
       walkPoints.clear()
       waypointPoints.clear()
       vpsPoints.clear()
+      cues.clear()
       lastUserSampleMs = 0L
       userSampleIndex = 0
     }
@@ -227,12 +241,67 @@ class NavigationLogger(context: Context) {
     log("SESSION", "New log session; user samples every ${USER_SAMPLE_INTERVAL_MS / 1000}s")
   }
 
+  /**
+   * Copies this session's .csv and .txt to Downloads/AllWalk without a dialog.
+   * Returns false when there is nothing to save or the copy fails.
+   */
+  fun saveToDownloads(): Boolean {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
+    val (csv, txt) = synchronized(lock) {
+      if (walkPoints.isEmpty() && pathPoints.isEmpty()) return false
+      writeTableLocked()
+      Pair(tableFile ?: return false, sessionFile ?: return false)
+    }
+    return try {
+      val base = exportBaseName()
+      copyToDownloads(csv, "text/csv", "$base.csv")
+      copyToDownloads(txt, "text/plain", "$base.txt")
+      Log.i(TAG, "Saved ${csv.name} and ${txt.name} to Downloads/AllWalk")
+      true
+    } catch (e: Exception) {
+      Log.e(TAG, "saveToDownloads failed", e)
+      false
+    }
+  }
+
+  /**
+   * File name for a saved log: the destination search text plus the session start time,
+   * e.g. "gong_cha_20261029_141503". Falls back to "nav_log_..." without a destination.
+   */
+  fun exportBaseName(): String {
+    val stamp = sessionFile?.nameWithoutExtension?.removePrefix("nav_log_")
+      ?: fileNameFormat.format(Date())
+    val slug = logTitle.lowercase(Locale.US)
+      .replace(Regex("[^a-z0-9]+"), "_")
+      .trim('_')
+      .take(40)
+      .trim('_')
+    return "${slug.ifBlank { "nav_log" }}_$stamp"
+  }
+
+  private fun copyToDownloads(file: File, mime: String, name: String) {
+    val resolver = appContext.contentResolver
+    val values = ContentValues().apply {
+      put(MediaStore.Downloads.DISPLAY_NAME, name)
+      put(MediaStore.Downloads.MIME_TYPE, mime)
+      put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/AllWalk")
+      put(MediaStore.Downloads.IS_PENDING, 1)
+    }
+    val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+      ?: throw java.io.IOException("Could not create ${file.name}")
+    resolver.openOutputStream(uri)?.use { out -> file.inputStream().use { it.copyTo(out) } }
+      ?: throw java.io.IOException("Could not open ${file.name}")
+    values.clear()
+    values.put(MediaStore.Downloads.IS_PENDING, 0)
+    resolver.update(uri, values, null, null)
+  }
+
   fun currentLogFile(): File {
     ensureSessionFile()
     return sessionFile!!
   }
 
-  /** Map table: type, latitude, longitude. One row per path, walk, waypoint, or VPS point. */
+  /** Map table: one latitude/longitude column pair per series, plus spoken cues. */
   fun currentTableFile(): File {
     ensureSessionFile()
     synchronized(lock) { writeTableLocked() }
@@ -290,7 +359,8 @@ class NavigationLogger(context: Context) {
           "VPS lines = camera pose when ARCore accuracy is VPS-quality " +
           "(Street View match points are not exposed by ARCore)\n" +
           "Format: timestamp | TYPE | message | lat=... | lng=... | heading=... | extras\n" +
-          "Map table (type,latitude,longitude) is the .csv next to this file.\n" +
+          "Map table is the .csv next to this file: path, walk, waypoint, and vps\n" +
+          "columns (latitude, longitude), plus cue_time, cue_lat, cue_lng, cue_text.\n" +
           "------------------------------------------------------------\n"
       )
       sessionFile = file
@@ -314,14 +384,32 @@ class NavigationLogger(context: Context) {
     }
   }
 
+  /**
+   * Wide table: row N holds the Nth point of every series. A series that is shorter
+   * leaves its columns empty, so each column pair can be plotted on its own.
+   */
   private fun writeTableLocked() {
     val file = tableFile ?: return
+    val series = listOf(pathPoints, walkPoints, waypointPoints, vpsPoints)
+    val rows = maxOf(series.maxOf { it.size }, cues.size)
     val body = buildString {
-      append("type,latitude,longitude\n")
-      appendRows("path", pathPoints)
-      appendRows("walk", walkPoints)
-      appendRows("waypoint", waypointPoints)
-      appendRows("vps", vpsPoints)
+      append(
+        "path_lat,path_lng,walk_lat,walk_lng,waypoint_lat,waypoint_lng,vps_lat,vps_lng," +
+          "cue_time,cue_lat,cue_lng,cue_text\n",
+      )
+      for (i in 0 until rows) {
+        for (points in series) {
+          val point = points.getOrNull(i)
+          append(point?.let { fmt(it.latitude) }.orEmpty()).append(',')
+          append(point?.let { fmt(it.longitude) }.orEmpty()).append(',')
+        }
+        val cue = cues.getOrNull(i)
+        append(cue?.time.orEmpty()).append(',')
+        append(cue?.lat?.let { fmt(it) }.orEmpty()).append(',')
+        append(cue?.lng?.let { fmt(it) }.orEmpty()).append(',')
+        append(cue?.let { csvQuote(it.text) }.orEmpty())
+        append('\n')
+      }
     }
     try {
       file.writeText(body)
@@ -330,16 +418,8 @@ class NavigationLogger(context: Context) {
     }
   }
 
-  private fun StringBuilder.appendRows(type: String, points: List<LatLng>) {
-    for (point in points) {
-      append(type)
-      append(',')
-      append(fmt(point.latitude))
-      append(',')
-      append(fmt(point.longitude))
-      append('\n')
-    }
-  }
+  private fun csvQuote(text: String): String =
+    "\"" + text.replace("\"", "\"\"").replace('\n', ' ') + "\""
 
   private fun appendLineLocked(line: String) {
     try {

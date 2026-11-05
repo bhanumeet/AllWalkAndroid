@@ -13,11 +13,23 @@ enum class DestinationProvider(val storageValue: String, val label: String) {
   }
 }
 
+enum class DoorDetectorMode(val storageValue: String, val label: String) {
+  YOLO("yolo", "YOLO (on device)"),
+  VLM("vlm", "VLM (OpenAI Decisions)");
+
+  companion object {
+    fun fromStorage(value: String?): DoorDetectorMode {
+      return entries.firstOrNull { it.storageValue == value } ?: YOLO
+    }
+  }
+}
+
 class AppSettings(context: Context) {
   companion object {
     private const val PREFS = "blindnav_settings"
     private const val KEY_DESTINATION_PROVIDER = "destination_provider"
     private const val KEY_PATH_BUFFER_METERS = "path_buffer_meters"
+    private const val KEY_DOOR_DETECTOR = "door_detector"
   }
 
   private val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -26,6 +38,12 @@ class AppSettings(context: Context) {
     get() = DestinationProvider.fromStorage(prefs.getString(KEY_DESTINATION_PROVIDER, null))
     set(value) {
       prefs.edit().putString(KEY_DESTINATION_PROVIDER, value.storageValue).apply()
+    }
+
+  var doorDetector: DoorDetectorMode
+    get() = DoorDetectorMode.fromStorage(prefs.getString(KEY_DOOR_DETECTOR, null))
+    set(value) {
+      prefs.edit().putString(KEY_DOOR_DETECTOR, value.storageValue).apply()
     }
 
   var pathBufferMeters: Double

@@ -20,7 +20,22 @@ data class DestinationResult(
   val latLng: LatLng,
   val displayName: String,
   val provider: DestinationProvider,
-)
+  /** Place name, spoken first. */
+  val name: String = displayName,
+  /** Street or area, so nearby branches can be told apart. */
+  val detail: String = "",
+  /** Full address, spoken once when navigation starts. */
+  val fullAddress: String = "",
+) {
+  /** Name plus the full address, without repeating the name if it is already in the address. */
+  val confirmLine: String
+    get() {
+      val address = fullAddress.trim()
+      if (address.isBlank()) return name
+      if (address.contains(name, ignoreCase = true)) return address
+      return "$name, $address"
+    }
+}
 
 /**
  * Resolves typed destination names via Geoapify or Google Places Text Search.
@@ -33,6 +48,7 @@ class DestinationResolver(
   companion object {
     private const val TAG = "DestinationResolver"
     private const val SEARCH_RADIUS_M = 5000
+    const val MAX_RESULTS = 4
   }
 
   private val client = OkHttpClient()
@@ -51,6 +67,30 @@ class DestinationResolver(
     onSuccess: (DestinationResult) -> Unit,
     onError: (String) -> Unit,
   ) {
+    search(
+      provider = provider,
+      placeName = placeName,
+      near = near,
+      onSuccess = { results ->
+        val first = results.firstOrNull()
+        if (first == null) {
+          fail(provider, "No such place in ${SEARCH_RADIUS_M / 1000}km", onError)
+        } else {
+          onSuccess(first)
+        }
+      },
+      onError = onError,
+    )
+  }
+
+  /** Up to [MAX_RESULTS] nearby matches, nearest first. */
+  fun search(
+    provider: DestinationProvider,
+    placeName: String,
+    near: LatLng,
+    onSuccess: (List<DestinationResult>) -> Unit,
+    onError: (String) -> Unit,
+  ) {
     log(
       "PROVIDER_SELECTED",
       "provider=${provider.storageValue} label=${provider.label} " +
@@ -58,15 +98,15 @@ class DestinationResolver(
         "fallback=NONE",
     )
     when (provider) {
-      DestinationProvider.GEOAPIFY -> resolveWithGeoapify(placeName, near, onSuccess, onError)
-      DestinationProvider.GOOGLE_PLACES -> resolveWithGooglePlaces(placeName, near, onSuccess, onError)
+      DestinationProvider.GEOAPIFY -> searchWithGeoapify(placeName, near, onSuccess, onError)
+      DestinationProvider.GOOGLE_PLACES -> searchWithGooglePlaces(placeName, near, onSuccess, onError)
     }
   }
 
-  private fun resolveWithGeoapify(
+  private fun searchWithGeoapify(
     placeName: String,
     near: LatLng,
-    onSuccess: (DestinationResult) -> Unit,
+    onSuccess: (List<DestinationResult>) -> Unit,
     onError: (String) -> Unit,
   ) {
     val reverseUrl = Uri.parse("https://api.geoapify.com/v1/geocode/reverse").buildUpon()
@@ -103,12 +143,14 @@ class DestinationResolver(
       log("API_REQUEST", "provider=geoapify step=search url=${redact(searchUrl)}")
       get(searchUrl, { err -> fail(DestinationProvider.GEOAPIFY, err, onError) }) { searchBody ->
         val ans = gson.fromJson(searchBody, Root::class.java)
-        val first = ans.results.firstOrNull()
         log(
           "API_RESPONSE",
           "provider=geoapify step=search resultCount=${ans.results.size}",
         )
-        if (first == null) {
+        val picks = ans.results.mapNotNull { toGeoapifyResult(it, placeName) }
+          .sortedBy { metersBetween(near, it.latLng) }
+          .take(MAX_RESULTS)
+        if (picks.isEmpty()) {
           fail(
             DestinationProvider.GEOAPIFY,
             "No such place in ${SEARCH_RADIUS_M / 1000}km",
@@ -116,26 +158,49 @@ class DestinationResolver(
           )
           return@get
         }
-        val addressNum = first.address_line2.split(" ").firstOrNull().orEmpty()
-        val display = listOf(first.address_line1, addressNum)
-          .filter { it.isNotBlank() }
-          .joinToString(" ")
-        succeed(
-          DestinationResult(
-            latLng = LatLng(first.lat, first.lon),
-            displayName = display.ifBlank { placeName },
-            provider = DestinationProvider.GEOAPIFY,
-          ),
-          onSuccess,
-        )
+        deliver(picks, onSuccess)
       }
     }
   }
 
-  private fun resolveWithGooglePlaces(
+  private fun toGeoapifyResult(result: com.google.ar.core.codelabs.hellogeospatial.GeocodingResult, placeName: String): DestinationResult? {
+    if (result.lat == 0.0 && result.lon == 0.0) return null
+    val place = result.name.clean().ifBlank { result.address_line1.clean() }.ifBlank { placeName }
+    val street = listOf(result.housenumber.clean(), result.street.clean())
+      .filter { it.isNotBlank() }
+      .joinToString(" ")
+    val lineStreet = result.address_line1.clean().substringBefore(",").trim()
+    val city = result.city.clean()
+    val detail = when {
+      street.isNotBlank() && !street.equals(place, ignoreCase = true) -> street
+      lineStreet.isNotBlank() &&
+        !lineStreet.equals(place, ignoreCase = true) &&
+        !lineStreet.equals(city, ignoreCase = true) -> lineStreet
+      else -> ""
+    }
+    val display = listOf(place, detail).filter { it.isNotBlank() }.joinToString(" — ")
+    val formatted = result.formatted.clean()
+    val full = if (formatted.isNotBlank()) {
+      formatted
+    } else {
+      listOf(detail, city, result.state.clean(), result.postcode.clean())
+        .filter { it.isNotBlank() }
+        .joinToString(", ")
+    }
+    return DestinationResult(
+      latLng = LatLng(result.lat, result.lon),
+      displayName = display.ifBlank { placeName },
+      provider = DestinationProvider.GEOAPIFY,
+      name = place,
+      detail = detail,
+      fullAddress = full,
+    )
+  }
+
+  private fun searchWithGooglePlaces(
     placeName: String,
     near: LatLng,
-    onSuccess: (DestinationResult) -> Unit,
+    onSuccess: (List<DestinationResult>) -> Unit,
     onError: (String) -> Unit,
   ) {
     val url = Uri.parse("https://maps.googleapis.com/maps/api/place/textsearch/json").buildUpon()
@@ -174,39 +239,72 @@ class DestinationResolver(
         )
         return@get
       }
-      val first = results!![0].asJsonObject
-      val loc = first.getAsJsonObject("geometry").getAsJsonObject("location")
-      val lat = loc.get("lat").asDouble
-      val lng = loc.get("lng").asDouble
-      val name = first.get("name")?.asString.orEmpty()
-      val address = first.get("formatted_address")?.asString.orEmpty()
-      val placeId = first.get("place_id")?.asString.orEmpty()
-      val display = listOf(name, address).filter { it.isNotBlank() }.joinToString(" — ")
-      log(
-        "API_RESPONSE",
-        "provider=google_places picked name=$name place_id=$placeId lat=$lat lng=$lng",
-      )
-      succeed(
+      val picks = (0 until count).mapNotNull { index ->
+        val item = results!![index].asJsonObject
+        val loc = item.getAsJsonObject("geometry")?.getAsJsonObject("location") ?: return@mapNotNull null
+        val lat = loc.get("lat")?.asDouble ?: return@mapNotNull null
+        val lng = loc.get("lng")?.asDouble ?: return@mapNotNull null
+        val name = item.get("name")?.asString.orEmpty().ifBlank { placeName }
+        val formatted = item.get("formatted_address")?.asString.orEmpty().trim()
+        val address = shortAddress(formatted)
+        val detail = if (address.equals(name, ignoreCase = true)) "" else address
+        val display = listOf(name, detail).filter { it.isNotBlank() }.joinToString(" — ")
         DestinationResult(
           latLng = LatLng(lat, lng),
           displayName = display.ifBlank { placeName },
           provider = DestinationProvider.GOOGLE_PLACES,
-        ),
-        onSuccess,
+          name = name,
+          detail = detail,
+          fullAddress = formatted,
+        )
+      }.sortedBy { metersBetween(near, it.latLng) }.take(MAX_RESULTS)
+      log(
+        "API_RESPONSE",
+        "provider=google_places picked=${picks.joinToString(" | ") { it.displayName }}",
       )
+      if (picks.isEmpty()) {
+        fail(
+          DestinationProvider.GOOGLE_PLACES,
+          "No such place in ${SEARCH_RADIUS_M / 1000}km",
+          onError,
+        )
+        return@get
+      }
+      deliver(picks, onSuccess)
     }
   }
 
-  private fun succeed(result: DestinationResult, onSuccess: (DestinationResult) -> Unit) {
+  private fun deliver(results: List<DestinationResult>, onSuccess: (List<DestinationResult>) -> Unit) {
+    val provider = results.first().provider
     log(
       "DEST_SUCCESS",
-      "USED_PROVIDER=${result.provider.storageValue} " +
-        "label=${result.provider.label} " +
-        "name=${result.displayName} " +
-        "lat=${result.latLng.latitude} lng=${result.latLng.longitude} " +
-        "fallback=NONE",
+      "USED_PROVIDER=${provider.storageValue} count=${results.size} " +
+        results.joinToString(" | ") {
+          "${it.displayName} @ ${it.latLng.latitude},${it.latLng.longitude}"
+        } + " fallback=NONE",
     )
-    onSuccess(result)
+    onSuccess(results)
+  }
+
+  /** Street line only. City and state stay off the spoken choice. */
+  private fun shortAddress(formatted: String): String {
+    return formatted.split(",")
+      .map { it.trim() }
+      .firstOrNull { it.isNotEmpty() }
+      .orEmpty()
+  }
+
+  private fun String?.clean(): String = this?.trim().orEmpty()
+
+  private fun metersBetween(a: LatLng, b: LatLng): Double {
+    val earthRadius = 6371000.0
+    val dLat = Math.toRadians(b.latitude - a.latitude)
+    val dLng = Math.toRadians(b.longitude - a.longitude)
+    val lat1 = Math.toRadians(a.latitude)
+    val lat2 = Math.toRadians(b.latitude)
+    val h = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) * Math.sin(dLng / 2)
+    return 2 * earthRadius * Math.asin(Math.sqrt(h))
   }
 
   private fun fail(provider: DestinationProvider, message: String, onError: (String) -> Unit) {

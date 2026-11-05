@@ -15,12 +15,23 @@
  */
 package com.google.ar.core.codelabs.hellogeospatial
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.util.Log
+import android.view.Surface
+import androidx.core.content.ContextCompat
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
@@ -28,6 +39,10 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.Toast
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationResult
+import com.google.android.gms.location.LocationServices
 import androidx.appcompat.app.AppCompatActivity
 import com.google.android.gms.maps.model.LatLng
 import com.google.ar.core.Config
@@ -55,6 +70,11 @@ class HelloGeoActivity : AppCompatActivity() {
   companion object {
     private const val TAG = "MyCheck"
     private const val SOS_COOLDOWN_MS = 1_500L
+    private const val SOS_LLM_TIMEOUT_MS = 20_000L
+    const val EXTRA_DEST_LAT = "dest_lat"
+    const val EXTRA_DEST_LNG = "dest_lng"
+    const val EXTRA_DEST_NAME = "dest_name"
+    const val EXTRA_DEST_QUERY = "dest_query"
   }
 
   lateinit var arCoreSessionHelper: ARCoreSessionLifecycleHelper
@@ -68,6 +88,56 @@ class HelloGeoActivity : AppCompatActivity() {
 
   private lateinit var speechRecognizer: SpeechRecognizer
   private var lastSosMs = 0L
+  /** True from volume-down until the LLM reply is spoken. */
+  private var sosLlmPending = false
+  private val sosHandler = Handler(Looper.getMainLooper())
+  private val sosTimeout = Runnable {
+    renderer.sosCapture = null
+    onSosHelp(null)
+  }
+
+  /** Phone GPS, used only to center the map until VPS locks. */
+  @Volatile var deviceLatLng: LatLng? = null
+  @Volatile var deviceHeadingDeg: Double = 0.0
+
+  private val guidanceHandler = Handler(Looper.getMainLooper())
+  private val guidanceTick = object : Runnable {
+    override fun run() {
+      if (::renderer.isInitialized) renderer.tickCoarseGuidance()
+      guidanceHandler.postDelayed(this, 1000L)
+    }
+  }
+  private val fusedLocation by lazy { LocationServices.getFusedLocationProviderClient(this) }
+  private val locationCallback = object : LocationCallback() {
+    override fun onLocationResult(result: LocationResult) {
+      val loc = result.lastLocation ?: return
+      onDeviceFix(loc)
+    }
+  }
+  private val sensorManager by lazy { getSystemService(SensorManager::class.java) }
+  private val rotationMatrix = FloatArray(9)
+  private val remappedMatrix = FloatArray(9)
+  private val orientationAngles = FloatArray(3)
+  private val headingListener = object : SensorEventListener {
+    override fun onSensorChanged(event: SensorEvent) {
+      if (event.sensor.type != Sensor.TYPE_ROTATION_VECTOR) return
+      SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
+      val rotation = windowManager.defaultDisplay.rotation
+      val (axisX, axisY) = when (rotation) {
+        Surface.ROTATION_90 -> SensorManager.AXIS_Y to SensorManager.AXIS_MINUS_X
+        Surface.ROTATION_180 -> SensorManager.AXIS_MINUS_X to SensorManager.AXIS_MINUS_Y
+        Surface.ROTATION_270 -> SensorManager.AXIS_MINUS_Y to SensorManager.AXIS_X
+        else -> SensorManager.AXIS_X to SensorManager.AXIS_Y
+      }
+      SensorManager.remapCoordinateSystem(rotationMatrix, axisX, axisY, remappedMatrix)
+      SensorManager.getOrientation(remappedMatrix, orientationAngles)
+      var degrees = Math.toDegrees(orientationAngles[0].toDouble())
+      if (degrees < 0) degrees += 360.0
+      deviceHeadingDeg = degrees
+    }
+
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+  }
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
@@ -76,7 +146,14 @@ class HelloGeoActivity : AppCompatActivity() {
     speechGuide = SpeechGuide(this, navLogger)
     hapticGuide = HapticGuide(this, navLogger)
     navGuide = ArrowAlignedGuide(speechGuide, navLogger, hapticGuide)
-    doorAssist = com.google.ar.core.codelabs.hellogeospatial.helpers.DoorAssist(this, speechGuide, navLogger)
+    doorAssist = com.google.ar.core.codelabs.hellogeospatial.helpers.DoorAssist(this, navLogger)
+    if (
+      Build.VERSION.SDK_INT <= 28 &&
+      ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) !=
+      PackageManager.PERMISSION_GRANTED
+    ) {
+      requestPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), 41)
+    }
 
     // Setup ARCore session lifecycle helper and configuration.
     arCoreSessionHelper = ARCoreSessionLifecycleHelper(this)
@@ -113,6 +190,16 @@ class HelloGeoActivity : AppCompatActivity() {
     view.setOnClickListener()
 
     setUpSpeechToText()
+    if (intent.hasExtra(EXTRA_DEST_LAT) && intent.hasExtra(EXTRA_DEST_LNG)) {
+      renderer.pendingDestination = LatLng(
+        intent.getDoubleExtra(EXTRA_DEST_LAT, 0.0),
+        intent.getDoubleExtra(EXTRA_DEST_LNG, 0.0),
+      )
+      val destination = intent.getStringExtra(EXTRA_DEST_NAME).orEmpty()
+      view.editText.setText(destination)
+      navGuide.destinationLabel = destination
+      navLogger.logTitle = intent.getStringExtra(EXTRA_DEST_QUERY).orEmpty().ifBlank { destination }
+    }
 
     // Sets up an example renderer using our HelloGeoRenderer.
     SampleRender(view.surfaceView, renderer, assets)
@@ -156,11 +243,22 @@ class HelloGeoActivity : AppCompatActivity() {
 
     resetButton.setOnClickListener {
       reset()
+      if (navLogger.saveToDownloads()) {
+        Toast.makeText(this, "Log saved to Downloads/AllWalk", Toast.LENGTH_SHORT).show()
+        navLogger.clearAndStartNewSession()
+      }
+      startActivity(
+        Intent(this, DestinationSearchActivity::class.java).apply {
+          addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+          putExtra(DestinationSearchActivity.EXTRA_START_FRESH, true)
+        },
+      )
     }
 
     resetVpsButton.setOnClickListener {
       resetVpsLocalization()
     }
+
   }
 
   /** Drop a stuck Geospatial fix by recreating the ARCore session. The route stays. */
@@ -210,15 +308,67 @@ class HelloGeoActivity : AppCompatActivity() {
     view.mapView?.setFirst = true
     view.editText.setText("")
     view.distance_text.text = ""
+    view.clearTurnRadiusNote()
   }
 
-  /** Volume up/down = SOS re-orientation (does not change system volume). */
+  /**
+   * Volume up = SOS re-orientation from the route. Volume down = SOS with the camera:
+   * one frame goes to the LLM for a description of the surroundings.
+   * Neither changes the system volume.
+   */
   override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-    if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+    if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
       triggerSos()
       return true
     }
+    if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+      triggerSosLlm()
+      return true
+    }
     return super.onKeyDown(keyCode, event)
+  }
+
+  private fun triggerSosLlm() {
+    if (sosLlmPending) return
+    val now = System.currentTimeMillis()
+    if (now - lastSosMs < SOS_COOLDOWN_MS) return
+    lastSosMs = now
+    sosLlmPending = true
+    hapticGuide.pulseSos()
+
+    val earth = arCoreSessionHelper.session?.earth
+    val status = if (earth == null || earth.trackingState != TrackingState.TRACKING) {
+      "Location not available yet."
+    } else {
+      val pose = earth.cameraGeospatialPose
+      navGuide.sosStatus(
+        user = LatLng(pose.latitude, pose.longitude),
+        headingDeg = pose.heading,
+        path = view.mapView?.viewPointList.orEmpty(),
+      )
+    }
+    navLogger.logEvent("SOS_LLM", "requested status=$status")
+    speechGuide.speak("Checking your surroundings.", priority = SpeakPriority.CRITICAL, flush = true)
+    renderer.sosCapture = status
+    // No camera frame (app paused, camera busy): give up so the button works again.
+    sosHandler.postDelayed(sosTimeout, SOS_LLM_TIMEOUT_MS)
+  }
+
+  /** Called on the UI thread with the LLM reply, or null when it failed. */
+  fun onSosHelp(help: String?) {
+    sosHandler.removeCallbacks(sosTimeout)
+    if (!sosLlmPending) return
+    sosLlmPending = false
+    if (help.isNullOrBlank()) {
+      navLogger.logEvent("SOS_LLM", "failed")
+      speechGuide.speak(
+        "Could not check your surroundings. Press volume up for your route.",
+        priority = SpeakPriority.CRITICAL,
+        flush = true,
+      )
+      return
+    }
+    navGuide.speakSosHelp(help)
   }
 
   private fun triggerSos() {
@@ -244,12 +394,56 @@ class HelloGeoActivity : AppCompatActivity() {
     navGuide.speakSos(user = user, headingDeg = pose.heading, path = path)
   }
 
+  override fun onResume() {
+    super.onResume()
+    startPhoneLocation()
+    sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)?.also { sensor ->
+      sensorManager.registerListener(headingListener, sensor, SensorManager.SENSOR_DELAY_UI)
+    }
+    guidanceHandler.removeCallbacks(guidanceTick)
+    guidanceHandler.post(guidanceTick)
+  }
+
+  override fun onPause() {
+    guidanceHandler.removeCallbacks(guidanceTick)
+    sensorManager.unregisterListener(headingListener)
+    fusedLocation.removeLocationUpdates(locationCallback)
+    super.onPause()
+  }
+
   override fun onDestroy() {
     speechGuide.shutdown()
     if (::speechRecognizer.isInitialized) {
       speechRecognizer.destroy()
     }
     super.onDestroy()
+  }
+
+  private fun onDeviceFix(loc: android.location.Location) {
+    val latLng = LatLng(loc.latitude, loc.longitude)
+    deviceLatLng = latLng
+    if (::view.isInitialized) view.mapView?.showUser(latLng)
+  }
+
+  private fun startPhoneLocation() {
+    if (
+      ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) !=
+      PackageManager.PERMISSION_GRANTED
+    ) {
+      return
+    }
+    try {
+      fusedLocation.lastLocation.addOnSuccessListener { loc ->
+        if (loc != null) onDeviceFix(loc)
+      }
+      val request = LocationRequest.create().apply {
+        priority = LocationRequest.PRIORITY_HIGH_ACCURACY
+        interval = 1000L
+        fastestInterval = 1000L
+      }
+      fusedLocation.requestLocationUpdates(request, locationCallback, Looper.getMainLooper())
+    } catch (_: SecurityException) {
+    }
   }
 
   // Configure the session, setting the desired options according to your usecase.
@@ -261,6 +455,13 @@ class HelloGeoActivity : AppCompatActivity() {
         geospatialMode = Config.GeospatialMode.ENABLED
       }
     )
+  }
+
+  override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+    super.onActivityResult(requestCode, resultCode, data)
+    if (requestCode == HelloGeoView.REQUEST_SAVE_LOG && resultCode == RESULT_OK) {
+      data?.data?.let { view.writeNavigationLog(it) }
+    }
   }
 
   override fun onRequestPermissionsResult(

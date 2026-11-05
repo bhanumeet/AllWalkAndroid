@@ -20,11 +20,10 @@ import kotlin.math.min
 
 /**
  * Runs the DoorDetection model on ARCore camera frames once the user is
- * inside the destination radius, then beeps and speaks toward the door.
+ * inside the destination radius, then beeps when a door is in view.
  */
 class DoorAssist(
   private val activity: HelloGeoActivity,
-  private val speech: SpeechGuide,
   private val logger: NavigationLogger?,
 ) {
   @Volatile var cue: String = ""
@@ -32,11 +31,14 @@ class DoorAssist(
   private val executor = Executors.newSingleThreadExecutor()
   private val busy = AtomicBoolean(false)
   private var detector: DoorDetector? = null
+  private val vlm = VlmDoorClient()
+  /** Read from settings each time door finding starts. */
+  @Volatile private var useVlm = false
+  /** Consecutive VLM yes answers; beep only after [VLM_YES_IN_ROW]. */
+  private var vlmYesInRow = 0
   private var started = false
   private var tones: ToneGenerator? = null
   private var lastBeepMs = 0L
-  private var lastSpeakMs = 0L
-  private var lastPhrase = ""
   /** Door rectangle in ARCore IMAGE_PIXELS: left, top, right, bottom. */
   @Volatile private var imageBox: FloatArray? = null
   private var boxOnScreen = false
@@ -45,12 +47,14 @@ class DoorAssist(
     if (started) return
     started = true
     cue = ""
+    vlmYesInRow = 0
+    useVlm = AppSettings(activity).doorDetector == DoorDetectorMode.VLM
     try {
       tones = ToneGenerator(AudioManager.STREAM_MUSIC, 100)
     } catch (error: Throwable) {
       Log.w(TAG, "ToneGenerator unavailable", error)
     }
-    logger?.logEvent("DOOR", "assist started")
+    logger?.logEvent("DOOR", "assist started detector=${if (useVlm) "vlm" else "yolo"}")
   }
 
   fun stopIfIdle() {
@@ -62,7 +66,6 @@ class DoorAssist(
   fun stop() {
     started = false
     cue = ""
-    lastPhrase = ""
     imageBox = null
     boxOnScreen = false
     activity.view.doorBoxOverlay.clearBox()
@@ -141,6 +144,17 @@ class DoorAssist(
       busy.set(false)
       return
     }
+    if (useVlm) {
+      executor.execute {
+        try {
+          checkWithVlm(bitmap)
+        } finally {
+          if (!bitmap.isRecycled) bitmap.recycle()
+          busy.set(false)
+        }
+      }
+      return
+    }
     executor.execute {
       try {
         val model = detector ?: DoorDetector(activity.applicationContext).also { detector = it }
@@ -152,6 +166,26 @@ class DoorAssist(
         if (!bitmap.isRecycled) bitmap.recycle()
         busy.set(false)
       }
+    }
+  }
+
+  /** One yes/no Decisions call per frame; the next frame goes when the reply is back. */
+  private fun checkWithVlm(bitmap: Bitmap) {
+    val probability = vlm.doorProbability(bitmap)
+    if (!started) return
+    if (probability == null) {
+      logger?.logEvent("DOOR", "vlm failed: ${vlm.lastFailure}")
+      // Back off so a missing key or no signal does not retry every frame.
+      Thread.sleep(VLM_RETRY_MS)
+      return
+    }
+    if (probability >= VlmDoorClient.DOOR_THRESHOLD) {
+      vlmYesInRow++
+      logger?.logEvent("DOOR", "vlm yes p=${"%.2f".format(probability)} in_row=$vlmYesInRow")
+      if (vlmYesInRow >= VLM_YES_IN_ROW) beep()
+    } else {
+      vlmYesInRow = 0
+      logger?.logEvent("DOOR", "vlm no p=${"%.2f".format(probability)}")
     }
   }
 
@@ -185,52 +219,15 @@ class DoorAssist(
       rotation = rotationDegrees,
       step = step,
     )
-    val center = door.box.centerX / result.width
-    val direction = when {
-      center < 0.38f -> DoorDirection.LEFT
-      center > 0.62f -> DoorDirection.RIGHT
-      else -> DoorDirection.AHEAD
-    }
-    val phrase = when (direction) {
-      DoorDirection.LEFT -> "Door to your left."
-      DoorDirection.RIGHT -> "Door to your right."
-      DoorDirection.AHEAD -> "Door ahead. Walk forward."
-    }
-    cue = phrase.removeSuffix(".")
-    showCue()
-    beep(direction)
-    val now = SystemClock.elapsedRealtime()
-    if (phrase != lastPhrase || now - lastSpeakMs >= SPEAK_INTERVAL_MS) {
-      lastPhrase = phrase
-      lastSpeakMs = now
-      speech.speak(phrase, priority = SpeakPriority.NORMAL, flush = false)
-      logger?.logEvent(
-        "DOOR",
-        "dir=$direction score=${"%.2f".format(door.score)} center=${"%.2f".format(center)}",
-      )
-    }
+    beep()
+    logger?.logEvent("DOOR", "seen score=${"%.2f".format(door.score)}")
   }
 
-  private fun beep(direction: DoorDirection) {
+  private fun beep() {
     val now = SystemClock.elapsedRealtime()
-    val interval = if (direction == DoorDirection.AHEAD) BEEP_AHEAD_MS else BEEP_INTERVAL_MS
-    if (now - lastBeepMs < interval) return
+    if (now - lastBeepMs < BEEP_INTERVAL_MS) return
     lastBeepMs = now
-    val tone = tones ?: return
-    when (direction) {
-      DoorDirection.LEFT -> tone.startTone(ToneGenerator.TONE_PROP_BEEP, 180)
-      DoorDirection.AHEAD -> tone.startTone(ToneGenerator.TONE_PROP_BEEP2, 160)
-      DoorDirection.RIGHT -> {
-        tone.startTone(ToneGenerator.TONE_PROP_BEEP, 140)
-        executor.execute {
-          try {
-            Thread.sleep(180)
-            if (started) tones?.startTone(ToneGenerator.TONE_PROP_BEEP, 140)
-          } catch (_: InterruptedException) {
-          }
-        }
-      }
-    }
+    tones?.startTone(ToneGenerator.TONE_PROP_BEEP, 180)
   }
 
   private fun showCue() {
@@ -242,13 +239,11 @@ class DoorAssist(
     }
   }
 
-  private enum class DoorDirection { LEFT, AHEAD, RIGHT }
-
   companion object {
     private const val TAG = "DoorAssist"
     private const val BEEP_INTERVAL_MS = 1200L
-    private const val BEEP_AHEAD_MS = 450L
-    private const val SPEAK_INTERVAL_MS = 2500L
+    private const val VLM_RETRY_MS = 2_000L
+    private const val VLM_YES_IN_ROW = 2
     private const val MAX_EDGE = 640
 
     private fun uprightBoxToImagePixels(

@@ -44,11 +44,18 @@ Used only for Geoapify destination search and reverse geocoding.
 2. Open the [Geoapify dashboard](https://myprojects.geoapify.com/) and copy the project API key.
 3. Paste it as `GEOAPIFY_API_KEY`.
 
+### OpenAI key (`OPENAI_API_KEY`)
+
+Used once at each approaching turn. The app sends one camera frame and asks the model whether the sidewalk is narrow, medium, or broad, then sets the turn distance to 2 m, 3 m, or 5 m.
+
+1. Create a key at [OpenAI API keys](https://platform.openai.com/api-keys).
+2. Paste it as `OPENAI_API_KEY`.
+
 ## How to set up
 
-1. Clone this repository.
+1. Clone this repository
 2. Open the project in Android Studio so it can write `sdk.dir` into `local.properties`.
-3. Add `MAPS_API_KEY` and, if you want Geoapify search, `GEOAPIFY_API_KEY` to that same file.
+3. Add `MAPS_API_KEY`. Add `GEOAPIFY_API_KEY` if you want Geoapify search, and `OPENAI_API_KEY` if you want sidewalk width to change the turn distance.
 4. Run the app on a physical Android phone with Google Play Services for AR. The Geospatial API does not work on an emulator.
 
 ## Contributing

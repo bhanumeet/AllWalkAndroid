@@ -33,6 +33,7 @@
       android:focusable="false" />
 
   <LinearLayout
+      android:id="@+id/destination_bar"
       android:layout_width="match_parent"
       android:layout_height="wrap_content"
       android:gravity="center_vertical"
@@ -48,13 +49,16 @@
         android:layout_height="40dp"
         android:layout_weight="1"
         android:background="@color/cardview_light_background"
-        android:hint="Search destination"
         android:inputType="text"
         android:paddingStart="10dp"
         android:paddingEnd="10dp"
         android:textColor="@color/cardview_dark_background"
         android:textColorHint="#88000000"
-        android:textSize="14sp" />
+        android:textSize="14sp"
+        android:focusable="false"
+        android:clickable="false"
+        android:cursorVisible="false"
+        android:hint="Destination" />
 
     <ImageButton
         android:id="@+id/listen_button"
@@ -65,7 +69,8 @@
         android:contentDescription="Listen"
         android:padding="8dp"
         android:scaleType="centerInside"
-        android:src="@drawable/ic_mic" />
+        android:src="@drawable/ic_mic"
+        android:visibility="gone" />
 
     <Button
         android:id="@+id/submit_button"
@@ -76,7 +81,8 @@
         android:paddingStart="12dp"
         android:paddingEnd="12dp"
         android:text="Go"
-        android:textSize="13sp" />
+        android:textSize="13sp"
+        android:visibility="gone" />
 
     <ImageButton
         android:id="@+id/settings_button"
@@ -196,6 +202,27 @@
         android:min="1"
         android:progress="5" />
   </LinearLayout>
+
+  <TextView
+      android:id="@+id/turn_radius_note"
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:layout_below="@id/destination_bar"
+      android:layout_marginStart="8dp"
+      android:layout_marginTop="6dp"
+      android:layout_marginEnd="8dp"
+      android:background="#CC000000"
+      android:clickable="false"
+      android:focusable="false"
+      android:gravity="center"
+      android:maxLines="2"
+      android:paddingStart="12dp"
+      android:paddingTop="6dp"
+      android:paddingEnd="12dp"
+      android:paddingBottom="6dp"
+      android:textColor="#FFFFFF"
+      android:textSize="14sp"
+      android:visibility="gone" />
 
   <com.google.ar.core.codelabs.hellogeospatial.helpers.MapTouchWrapper
       android:id="@+id/map_wrapper"

@@ -9,6 +9,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import com.google.ar.core.codelabs.hellogeospatial.helpers.AppSettings
 import com.google.ar.core.codelabs.hellogeospatial.helpers.DestinationProvider
+import com.google.ar.core.codelabs.hellogeospatial.helpers.DoorDetectorMode
 
 class SettingsActivity : AppCompatActivity() {
   private lateinit var settings: AppSettings
@@ -40,6 +41,21 @@ class SettingsActivity : AppCompatActivity() {
       Toast.makeText(this, "Using ${provider.label}", Toast.LENGTH_SHORT).show()
       // Also write to the live nav log if main activity process still has one — prefs are enough.
       android.util.Log.i("SettingsActivity", "DEST_PROVIDER_SAVED=${provider.storageValue}")
+    }
+
+    val doorGroup = findViewById<RadioGroup>(R.id.door_detector_group)
+    when (settings.doorDetector) {
+      DoorDetectorMode.YOLO -> findViewById<RadioButton>(R.id.door_yolo).isChecked = true
+      DoorDetectorMode.VLM -> findViewById<RadioButton>(R.id.door_vlm).isChecked = true
+    }
+    doorGroup.setOnCheckedChangeListener { _, checkedId ->
+      val mode = when (checkedId) {
+        R.id.door_vlm -> DoorDetectorMode.VLM
+        else -> DoorDetectorMode.YOLO
+      }
+      settings.doorDetector = mode
+      status.text = "Door detection: ${mode.label}"
+      Toast.makeText(this, "Door detection: ${mode.label}", Toast.LENGTH_SHORT).show()
     }
 
     done.setOnClickListener { finish() }
