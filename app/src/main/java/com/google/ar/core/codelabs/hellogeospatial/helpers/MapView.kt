@@ -36,6 +36,10 @@ class MapView(val activity: HelloGeoActivity, val googleMap: GoogleMap) {
   private val EARTH_MARKER_COLOR: Int = Color.argb(255, 125, 125, 125)
   /** Semi-transparent blue corridor (screen-width polyline ≈ 2 × buffer meters). */
   private val BUFFER_FILL_COLOR: Int = Color.argb(90, 30, 144, 255)
+  private val TURN_FILL_COLOR: Int = Color.argb(80, 255, 204, 0)
+  private val TURN_STROKE_COLOR: Int = Color.argb(230, 230, 160, 0)
+  private val ARRIVAL_FILL_COLOR: Int = Color.argb(90, 255, 140, 0)
+  private val ARRIVAL_STROKE_COLOR: Int = Color.argb(230, 230, 90, 0)
 
   var setInitialCameraPosition = false
   val cameraMarker = createMarker(CAMERA_MARKER_COLOR,false)
@@ -55,6 +59,10 @@ class MapView(val activity: HelloGeoActivity, val googleMap: GoogleMap) {
   var polyline: Polyline? = null
   /** Wide translucent path = visual corridor of width 2 × [bufferMeters]. */
   private var bufferPolyline: Polyline? = null
+  private val turnCircles = mutableListOf<Circle>()
+  private var shownTurnRadius = -1.0
+  private var arrivalBox: Polygon? = null
+  private var shownArrivalHalfWidth = -1.0
   private var bufferMeters: Double = ArrowAlignedGuide.DEFAULT_BUFFER_METERS
   private var lastBufferDrawZoom: Float = -1f
 
@@ -129,6 +137,73 @@ class MapView(val activity: HelloGeoActivity, val googleMap: GoogleMap) {
     viewPointList.clear()
     curPointer = 0
     clearBuffer()
+    clearTurnRadii()
+    clearArrivalRadius()
+  }
+
+  /** Yellow circles at each corner. Radius is the live turn-now distance in meters. */
+  fun syncTurnRadii(meters: Double) {
+    if (kotlin.math.abs(meters - shownTurnRadius) < 0.05) return
+    removeTurnCircles()
+    shownTurnRadius = meters
+    if (viewPointList.size < 3) return
+    val radius = meters.coerceAtLeast(1.0)
+    for (point in activity.navGuide.turnBendPoints(viewPointList)) {
+      turnCircles.add(
+        googleMap.addCircle(
+          CircleOptions()
+            .center(point)
+            .radius(radius)
+            .fillColor(TURN_FILL_COLOR)
+            .strokeColor(TURN_STROKE_COLOR)
+            .strokeWidth(4f)
+            .zIndex(2f)
+            .clickable(false),
+        ),
+      )
+    }
+  }
+
+  fun clearTurnRadii() {
+    removeTurnCircles()
+    shownTurnRadius = -1.0
+  }
+
+  /**
+   * Orange box at the path end: the arrived trigger. Its width across the sidewalk follows
+   * the destination photo; its length along the path is fixed.
+   */
+  fun syncArrivalBox(halfWidthM: Double) {
+    if (arrivalBox != null && kotlin.math.abs(halfWidthM - shownArrivalHalfWidth) < 0.05) return
+    clearArrivalRadius()
+    val corners = activity.navGuide.arrivalBoxCorners(viewPointList)
+    if (corners.isEmpty()) return
+    shownArrivalHalfWidth = halfWidthM
+    arrivalBox = googleMap.addPolygon(
+      PolygonOptions()
+        .addAll(corners)
+        .fillColor(ARRIVAL_FILL_COLOR)
+        .strokeColor(ARRIVAL_STROKE_COLOR)
+        .strokeWidth(4f)
+        .zIndex(2f)
+        .clickable(false),
+    )
+  }
+
+  private fun drawArrivalRadius() {
+    clearArrivalRadius()
+    syncArrivalBox(activity.navGuide.arrivalHalfWidthM)
+  }
+
+  private fun clearArrivalRadius() {
+    arrivalBox?.remove()
+    arrivalBox = null
+    shownArrivalHalfWidth = -1.0
+  }
+
+  private fun removeTurnCircles() {
+    turnCircles.forEach { it.remove() }
+    turnCircles.clear()
   }
 
   fun addViewPointMarker(latLng:LatLng){
@@ -150,6 +225,8 @@ class MapView(val activity: HelloGeoActivity, val googleMap: GoogleMap) {
 
     polyline = googleMap.addPolyline(polylineOptions.apply { zIndex(1f) })
     drawBuffer(bufferMeters)
+    syncTurnRadii(activity.navGuide.turnNowMeters)
+    drawArrivalRadius()
   }
 
   fun setBufferMeters(meters: Double, redraw: Boolean = true) {
@@ -197,6 +274,20 @@ class MapView(val activity: HelloGeoActivity, val googleMap: GoogleMap) {
   fun clearBuffer() {
     bufferPolyline?.remove()
     bufferPolyline = null
+  }
+
+  /** Center on a known fix before ARCore has localized, so the map does not open on the world. */
+  fun showUser(position: LatLng) {
+    if (activity.renderer.earthPoseIsCurrent()) return
+    cameraMarker.isVisible = true
+    cameraMarker.position = position
+    if (!setInitialCameraPosition) {
+      setInitialCameraPosition = true
+      setFirst = false
+      googleMap.moveCamera(CameraUpdateFactory.newLatLngZoom(position, 21f))
+    } else if (!activity.renderer.isClick) {
+      googleMap.moveCamera(CameraUpdateFactory.newLatLng(position))
+    }
   }
 
   fun updateMapPosition(latitude: Double, longitude: Double, heading: Double, isClick: Boolean){

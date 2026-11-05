@@ -80,23 +80,24 @@ class SpeechGuide(
 
   fun isSpeaking(): Boolean = speaking
 
+  /** Returns false when the line was dropped. */
   fun speak(
     text: String,
     priority: SpeakPriority = SpeakPriority.NORMAL,
     flush: Boolean = false,
-  ) {
-    if (!ready || text.isBlank()) return
+  ): Boolean {
+    if (!ready || text.isBlank()) return false
 
     // Drift is last: never interrupt, and skip while anything else is talking.
     if (priority == SpeakPriority.DRIFT) {
       if (speaking || activePriority.rank > SpeakPriority.DRIFT.rank) {
         logger?.logEvent("TTS_SKIP", "drift blocked by ${activePriority.name}: $text")
-        return
+        return false
       }
     } else if (speaking && priority.rank < activePriority.rank) {
       // Lower than what's already playing (e.g. normal while SOS) — drop.
       logger?.logEvent("TTS_SKIP", "${priority.name} blocked by ${activePriority.name}: $text")
-      return
+      return false
     }
 
     val shouldFlush =
@@ -112,6 +113,7 @@ class SpeechGuide(
     speaking = true
     val params = Bundle()
     tts.speak(text, mode, params, utteranceId)
+    return true
   }
 
   /** Only for route reset / teardown — not for temporary mute. */

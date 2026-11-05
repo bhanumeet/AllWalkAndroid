@@ -8,6 +8,7 @@ if (localPropsFile.exists()) {
 }
 def mapsApiKey = localProps.getProperty("MAPS_API_KEY", "")
 def geoapifyApiKey = localProps.getProperty("GEOAPIFY_API_KEY", "")
+def openaiApiKey = localProps.getProperty("OPENAI_API_KEY", "")
 
 android {
     compileSdkVersion 34
@@ -24,6 +25,10 @@ android {
         manifestPlaceholders = [MAPS_API_KEY: mapsApiKey]
         resValue "string", "GoogleCloudApiKey", mapsApiKey
         resValue "string", "GeoapifyApiKey", geoapifyApiKey
+        buildConfigField "String", "OPENAI_API_KEY", "\"${openaiApiKey}\""
+    }
+    buildFeatures {
+        buildConfig true
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8

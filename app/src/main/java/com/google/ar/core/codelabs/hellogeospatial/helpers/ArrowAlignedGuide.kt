@@ -29,16 +29,31 @@ class ArrowAlignedGuide(
     const val DEFAULT_BUFFER_METERS = 5.0
     const val MIN_BUFFER_METERS = 1
     const val MAX_BUFFER_METERS = 20
-    private const val TURN_NOW_M = 2.0
+    /** Narrow sidewalk. Medium is 3 m, broad is 5 m, set after the sidewalk photo. */
+    private const val TURN_NOW_NARROW_M = 2.0
+    private const val TURN_NOW_MEDIUM_M = 3.0
+    private const val TURN_NOW_BROAD_M = 5.0
     /** Single early cue before the turn. */
     private const val TURN_AHEAD_M = 10.0
+    /** Send the sidewalk photo this far before the next waypoint. */
+    private const val SIDEWALK_LOOK_M = 10.0
     /**
      * Arrival / near-destination use the **last path waypoint** (Directions polyline end),
      * not the Places/Geoapify building centroid — that can sit inside a store.
      */
     private const val DEST_NEAR_M = 10.0
-    /** Must be this close (crow-fly) to the path-end waypoint to count as arrived. */
-    private const val DEST_ARRIVED_M = 2.0
+    private const val METERS_PER_DEG_LAT = 111_320.0
+    /** Destination photo for the scene description, taken before the approach cue. */
+    private const val DEST_PHOTO_M = 15.0
+    /**
+     * Arrival box at the path end. Along the path it reaches this far before and after the end.
+     * Across the sidewalk it starts at this half-width and widens with the destination photo.
+     */
+    const val DEST_ARRIVED_M = 2.0
+    /** Arrival box half-width across the sidewalk, from the destination photo. */
+    private const val ARRIVE_HALF_NARROW_M = 3.0
+    private const val ARRIVE_HALF_MEDIUM_M = 4.0
+    private const val ARRIVE_HALF_BROAD_M = 6.0
     /** Start door finding this close to the path end or the place pin. */
     private const val DOOR_ASSIST_M = 3.0
     private const val TURN_MIN_DEG = 45.0
@@ -58,6 +73,23 @@ class ArrowAlignedGuide(
   /** Latched inside 3 m of the destination. Stays on until navigation reset. */
   @Volatile var doorAssist: Boolean = false
 
+  /** Distance at which "turn now" fires. Starts at 2 m until the sidewalk photo returns. */
+  @Volatile var turnNowMeters: Double = TURN_NOW_NARROW_M
+  /** Arrival box half-width across the sidewalk. The length along the path stays [DEST_ARRIVED_M]. */
+  @Volatile var arrivalHalfWidthM: Double = ARRIVE_HALF_NARROW_M
+
+  /** Renderer grabs one camera frame when this is true. */
+  @Volatile var captureSidewalk: Boolean = false
+  /** One camera frame at 15 m from the destination, sent for a short spoken cue. */
+  @Volatile var captureDestination: Boolean = false
+  /** Clock direction included with the destination photo. */
+  @Volatile var destinationDirection: String = ""
+  private var destinationPhotoRequested = false
+  @Volatile var sidewalkCaptureVertex: Int = -1
+  /** Shown on the camera. Set as soon as the sidewalk check starts. */
+  @Volatile var sidewalkStatus: String? = null
+  private var sidewalkRequestedFor: Int = -1
+
   /** Live on-route threshold (meters from nearest path point). Slider writes here. */
   @Volatile
   var corridorMeters: Double =
@@ -71,6 +103,9 @@ class ArrowAlignedGuide(
   private var announcedBands = mutableSetOf<String>()
   private var announcedDestNear = false
   private var arrivedAnnounced = false
+  private var driftPending = false
+  /** Destination reply that could not be spoken yet (e.g. SOS was talking). Retried in update(). */
+  private var destCuePending: String? = null
   private var lastDeviationSpeakMs = 0L
   private var lastSpeechMs = 0L
   private var lastAlignCueMs = 0L
@@ -83,6 +118,8 @@ class ArrowAlignedGuide(
   private var routeWaypoints: List<LatLng> = emptyList()
   /** Geocoded place pin (often off the sidewalk). Used for left/right, not for the arrival radius. */
   private var placePin: LatLng? = null
+  /** Full place and address, spoken once before the first "face the path" cue. */
+  var destinationLabel: String = ""
   private val announcedAffirm = mutableSetOf<String>()
 
   data class Status(
@@ -124,12 +161,23 @@ class ArrowAlignedGuide(
     lastAlignCueMs = 0L
     routeStarted = false
     wasOnRoute = true
+    driftPending = false
+    destCuePending = null
     awaitingPathAlign = false
     startAlignedAnnounced = false
     routeWaypoints = emptyList()
     placePin = null
     announcedAffirm.clear()
     doorAssist = false
+    turnNowMeters = TURN_NOW_NARROW_M
+    arrivalHalfWidthM = ARRIVE_HALF_NARROW_M
+    captureSidewalk = false
+    captureDestination = false
+    destinationDirection = ""
+    destinationPhotoRequested = false
+    sidewalkCaptureVertex = -1
+    sidewalkRequestedFor = -1
+    sidewalkStatus = null
     haptics?.stopDrift()
     if (stopSpeech) {
       speech.stop()
@@ -198,11 +246,12 @@ class ArrowAlignedGuide(
     lastAlignCueMs = nowMs
 
     val clock = clockHourFromRelativeDeg(relToPath)
-    val cue = if (clock == 12) {
+    val turn = if (clock == 12) {
       "You're facing the path."
     } else {
       "Turn to your $clock o'clock to face the path."
     }
+    val cue = turn
     logger?.logEvent(
       "ORIENT_ALIGN",
       "heading=${"%.1f".format(headingDeg)} pathBearing=${"%.1f".format(pathBearing)} " +
@@ -232,11 +281,16 @@ class ArrowAlignedGuide(
    */
   fun speakSos(user: LatLng, headingDeg: Double, path: List<LatLng>) {
     haptics?.pulseSos()
+    val msg = sosStatus(user, headingDeg, path)
+    speakShort(msg, flush = true, priority = SpeakPriority.CRITICAL)
+  }
+
+  /** Path status as spoken by the volume-up SOS. Also sent to the LLM for volume-down SOS. */
+  fun sosStatus(user: LatLng, headingDeg: Double, path: List<LatLng>): String {
     if (path.size < 2) {
       val msg = "No route set."
       logger?.logEvent("SOS", msg)
-      speakShort(msg, flush = true, priority = SpeakPriority.CRITICAL)
-      return
+      return msg
     }
 
     val nearest = nearestPointOnPath(path, user)
@@ -285,7 +339,15 @@ class ArrowAlignedGuide(
         "faceClock=$faceClock dest_m=$destM " +
         "lat=${"%.5f".format(user.latitude)} lng=${"%.5f".format(user.longitude)}",
     )
-    speakShort(msg, flush = true, priority = SpeakPriority.CRITICAL)
+    return msg
+  }
+
+  /** Spoken reply from the LLM SOS. Interrupts anything else. */
+  fun speakSosHelp(line: String) {
+    val spoken = line.trim()
+    if (spoken.isBlank()) return
+    speakShort(spoken, flush = true, priority = SpeakPriority.CRITICAL)
+    logger?.logEvent("SOS_LLM", "spoken=$spoken")
   }
 
   /**
@@ -328,10 +390,14 @@ class ArrowAlignedGuide(
       updateStartAlignment(path, user, headingDeg, nowMs)
     }
 
+    maybeRequestDestinationPhoto(user, headingDeg, pathEnd, crowFlyToEnd)
+    retryDestinationCue()
+
     // Arrive when within the radius of the path-end waypoint. Buffer does not matter.
-    val arrivedNow = crowFlyToEnd <= DEST_ARRIVED_M
+    val arrivedNow = insideArrivalBox(path, user)
     val pinNear = placePin?.let { distanceMeters(user, it) <= DOOR_ASSIST_M } == true
-    if (!doorAssist && (crowFlyToEnd <= DOOR_ASSIST_M || pinNear)) {
+    // A broad arrival box reaches past the door-assist circle, so arriving also starts it.
+    if (!doorAssist && (crowFlyToEnd <= DOOR_ASSIST_M || pinNear || arrivedNow)) {
       doorAssist = true
       logger?.logEvent(
         "DOOR",
@@ -385,9 +451,10 @@ class ArrowAlignedGuide(
       announcedDestNear = true
       val sideTarget = sideTargetOrPathEnd(pathEnd)
       val destRel = relativeBearingDeg(headingDeg, absoluteBearingDeg(user, sideTarget))
+      // Queue behind the scene description if it is already playing.
       speakShort(
         "Approaching destination. ${destinationClockPhrase(destRel)}",
-        flush = true,
+        flush = !destinationPhotoRequested,
       )
       logger?.logEvent(
         "DEST_NEAR",
@@ -396,25 +463,30 @@ class ArrowAlignedGuide(
       )
     }
 
+    maybeRequestSidewalk(path, user, segmentIndex)
+
     if (!onRoute) {
       val justLeftPath = wasOnRoute
       wasOnRoute = false
       // Restart vibe when first leaving path, and refresh when we speak (OS can cancel loops).
       haptics?.startDrift(restart = justLeftPath)
-      if (justLeftPath || nowMs - lastDeviationSpeakMs >= deviationIntervalMs) {
+      // driftPending: the last drift line was dropped because another cue was talking.
+      // Retry every update until it plays, instead of waiting out the repeat interval.
+      if (justLeftPath || driftPending || nowMs - lastDeviationSpeakMs >= deviationIntervalMs) {
         val correction = if (sideLeft) "right" else "left"
         val waypointRel = relativeBearingDeg(headingDeg, absoluteBearingDeg(user, lookAhead))
         val waypointClock = clockHourFromRelativeDeg(waypointRel)
-        speakShort(
+        val spoken = speakShort(
           "Drifting, bear $correction. Next waypoint to your $waypointClock o'clock.",
           priority = SpeakPriority.DRIFT,
         )
-        lastDeviationSpeakMs = nowMs
+        driftPending = !spoken
+        if (spoken) lastDeviationSpeakMs = nowMs
         haptics?.startDrift(restart = true)
         logger?.logEvent(
           "DRIFT",
           "cross_m=${"%.1f".format(crossTrack)} buf_m=${"%.1f".format(bufferM)} " +
-            "bear=$correction waypointClock=$waypointClock justLeft=$justLeftPath",
+            "bear=$correction waypointClock=$waypointClock justLeft=$justLeftPath spoken=$spoken",
         )
       }
     } else {
@@ -425,6 +497,7 @@ class ArrowAlignedGuide(
         )
       }
       wasOnRoute = true
+      driftPending = false
       haptics?.stopDrift()
       // Don't mix turn cues with start-alignment prompts.
       if (!awaitingPathAlign) {
@@ -542,32 +615,32 @@ class ArrowAlignedGuide(
     }
 
     val rel = relativeBearingDeg(headingDeg, turn.neededBearingDeg)
-    // Already facing the right way — stay quiet.
-    if (kotlin.math.abs(rel) < ALREADY_FACING_DEG) {
-      return
-    }
-
-    val direction = if (rel > 0) "right" else "left"
+    val dist = turn.distanceMeters
 
     if (turn.vertexIndex != activeTurnVertex) {
       activeTurnVertex = turn.vertexIndex
       announcedBands.clear()
+      turnNowMeters = TURN_NOW_NARROW_M
       logger?.logEvent(
         "TURN_USER",
         "vertex=${turn.vertexIndex} " +
           "userHeading=${"%.1f".format(headingDeg)} " +
           "neededBearing=${"%.1f".format(turn.neededBearingDeg)} " +
           "relDeg=${"%.1f".format(rel)} " +
-          "dir=$direction " +
-          "dist_m=${"%.1f".format(turn.distanceMeters)} " +
+          "dist_m=${"%.1f".format(dist)} " +
           "source=user_heading_vs_path_bend",
       )
     }
 
-    val dist = turn.distanceMeters
+    // Already facing the right way — stay quiet. The sidewalk photo may still be in flight.
+    if (kotlin.math.abs(rel) < ALREADY_FACING_DEG) {
+      return
+    }
+
+    val direction = if (rel > 0) "right" else "left"
 
     when {
-      dist <= TURN_NOW_M -> {
+      dist <= turnNowMeters -> {
         if (announcedBands.add("now")) {
           speakShort("Turn $direction now.", flush = true)
           if (direction == "left") {
@@ -585,13 +658,188 @@ class ArrowAlignedGuide(
     }
   }
 
+  /**
+   * Apply the sidewalk class to this turn. Returns the new turn-now distance in meters.
+   */
+  fun applySidewalkWidth(waypointIndex: Int, width: String): Int? {
+    if (waypointIndex != sidewalkRequestedFor) return null
+    val meters = when (width) {
+      "broad" -> TURN_NOW_BROAD_M
+      "medium" -> TURN_NOW_MEDIUM_M
+      else -> TURN_NOW_NARROW_M
+    }
+    turnNowMeters = meters
+    sidewalkStatus = "${width.replaceFirstChar { it.uppercase() }} sidewalk. Turn radius updated to ${meters.toInt()} m"
+    logger?.logEvent(
+      "TURN_RADIUS",
+      "waypoint=$waypointIndex width=$width now_m=${meters.toInt()}",
+    )
+    return meters.toInt()
+  }
+
+  /** Widen or narrow the arrival box from the destination photo. */
+  fun applyDestinationWidth(width: String) {
+    arrivalHalfWidthM = when (width) {
+      "broad" -> ARRIVE_HALF_BROAD_M
+      "medium" -> ARRIVE_HALF_MEDIUM_M
+      else -> ARRIVE_HALF_NARROW_M
+    }
+    logger?.logEvent(
+      "ARRIVE_BOX",
+      "width=$width half_width_m=${arrivalHalfWidthM.toInt()} half_length_m=${DEST_ARRIVED_M.toInt()}",
+    )
+  }
+
+  /**
+   * Unit direction of the last stretch of path (east, north), walking back
+   * past points closer than 1 m to the end so a tiny final segment does not skew it.
+   */
+  private fun arrivalAxis(path: List<LatLng>): Pair<Double, Double>? {
+    if (path.size < 2) return null
+    val end = path.last()
+    for (i in path.lastIndex - 1 downTo 0) {
+      val (east, north) = localMeters(end, path[i])
+      val len = kotlin.math.hypot(east, north)
+      if (len >= 1.0) return Pair(-east / len, -north / len)
+    }
+    return null
+  }
+
+  /** Offset of [p] from [origin] in meters (east, north). Good over tens of meters. */
+  private fun localMeters(origin: LatLng, p: LatLng): Pair<Double, Double> {
+    val north = (p.latitude - origin.latitude) * METERS_PER_DEG_LAT
+    val east = (p.longitude - origin.longitude) * METERS_PER_DEG_LAT *
+      cos(Math.toRadians(origin.latitude))
+    return Pair(east, north)
+  }
+
+  private fun insideArrivalBox(path: List<LatLng>, user: LatLng): Boolean {
+    val end = path.last()
+    val axis = arrivalAxis(path) ?: return distanceMeters(user, end) <= DEST_ARRIVED_M
+    val (east, north) = localMeters(end, user)
+    val along = east * axis.first + north * axis.second
+    val across = -east * axis.second + north * axis.first
+    return kotlin.math.abs(along) <= DEST_ARRIVED_M &&
+      kotlin.math.abs(across) <= arrivalHalfWidthM
+  }
+
+  /** Corners of the arrival box for the map, or empty when the path is too short. */
+  fun arrivalBoxCorners(path: List<LatLng>): List<LatLng> {
+    val end = path.lastOrNull() ?: return emptyList()
+    val axis = arrivalAxis(path) ?: return emptyList()
+    val half = arrivalHalfWidthM
+    val cosLat = cos(Math.toRadians(end.latitude))
+    fun corner(along: Double, across: Double): LatLng {
+      val east = along * axis.first - across * axis.second
+      val north = along * axis.second + across * axis.first
+      return LatLng(
+        end.latitude + north / METERS_PER_DEG_LAT,
+        end.longitude + east / (METERS_PER_DEG_LAT * cosLat),
+      )
+    }
+    return listOf(
+      corner(-DEST_ARRIVED_M, -half),
+      corner(DEST_ARRIVED_M, -half),
+      corner(DEST_ARRIVED_M, half),
+      corner(-DEST_ARRIVED_M, half),
+    )
+  }
+
+  fun markSidewalkFailed(waypointIndex: Int, reason: String) {
+    if (waypointIndex != sidewalkRequestedFor) return
+    val why = if (reason.contains("credit", ignoreCase = true)) {
+      "OpenAI account has no credits."
+    } else {
+      "Turn radius stays ${turnNowMeters.toInt()} m."
+    }
+    sidewalkStatus = "Sidewalk check failed. $why"
+    logger?.logEvent("TURN_RADIUS", "waypoint=$waypointIndex failed=$reason")
+  }
+
+  /** One photo at 15 m from the path end, so the reply can name the entrance. */
+  private fun maybeRequestDestinationPhoto(
+    user: LatLng,
+    headingDeg: Double,
+    pathEnd: LatLng,
+    crowFlyToEnd: Double,
+  ) {
+    if (destinationPhotoRequested || crowFlyToEnd > DEST_PHOTO_M) return
+    destinationPhotoRequested = true
+    val sideTarget = sideTargetOrPathEnd(pathEnd)
+    val destRel = relativeBearingDeg(headingDeg, absoluteBearingDeg(user, sideTarget))
+    destinationDirection = destinationClockPhrase(destRel)
+    captureDestination = true
+    logger?.logEvent(
+      "DEST_CUE",
+      "photo requested crowfly_m=${"%.1f".format(crowFlyToEnd)} direction=$destinationDirection",
+    )
+  }
+
+  fun speakDestinationCue(line: String) {
+    val spoken = line.trim()
+    if (spoken.isBlank()) return
+    // Queued so it does not cut off "Approaching destination".
+    if (speakShort(spoken, flush = false)) {
+      destCuePending = null
+      logger?.logEvent("DEST_CUE", "spoken=$spoken")
+    } else {
+      // Something more urgent (SOS, turn) is talking. Say it once that finishes.
+      destCuePending = spoken
+      logger?.logEvent("DEST_CUE", "waiting=$spoken")
+    }
+  }
+
+  /** Speak a held destination reply once the voice is free. Dropped after arrival. */
+  private fun retryDestinationCue() {
+    val pending = destCuePending ?: return
+    if (arrivedAnnounced) {
+      destCuePending = null
+      logger?.logEvent("DEST_CUE", "dropped_after_arrival=$pending")
+      return
+    }
+    if (speech.isSpeaking()) return
+    speakDestinationCue(pending)
+  }
+
+  /** One photo when the next turn is 10 m ahead. Straight waypoints are skipped. */
+  private fun maybeRequestSidewalk(path: List<LatLng>, user: LatLng, segmentIndex: Int) {
+    if (doorAssist || path.size < 3) return
+    val turn = findNextTurn(path, user, segmentIndex) ?: return
+    if (turn.distanceMeters > SIDEWALK_LOOK_M || sidewalkRequestedFor == turn.vertexIndex) return
+    sidewalkRequestedFor = turn.vertexIndex
+    sidewalkCaptureVertex = turn.vertexIndex
+    captureSidewalk = true
+    sidewalkStatus = "Checking sidewalk…"
+    logger?.logEvent(
+      "TURN_RADIUS",
+      "photo requested turn=${turn.vertexIndex} remaining_m=${"%.1f".format(turn.distanceMeters)}",
+    )
+  }
+
   private fun speakShort(
     text: String,
     flush: Boolean = false,
     priority: SpeakPriority = SpeakPriority.NORMAL,
-  ) {
-    speech.speak(text, priority = priority, flush = flush)
+  ): Boolean {
+    val spoken = speech.speak(text, priority = priority, flush = flush)
     lastSpeechMs = System.currentTimeMillis()
+    return spoken
+  }
+
+  /** Path corners of at least 45 degrees. The turn-now circle is drawn on these. */
+  fun turnBendPoints(path: List<LatLng>): List<LatLng> {
+    if (path.size < 3) return emptyList()
+    val bends = ArrayList<LatLng>()
+    for (vertex in 1 until path.lastIndex) {
+      val before = pointAlongPath(path, vertex, -TURN_SAMPLE_M) ?: path[vertex - 1]
+      val after = pointAlongPath(path, vertex, TURN_SAMPLE_M) ?: path[vertex + 1]
+      val bearingIn = absoluteBearingDeg(before, path[vertex])
+      val bearingOut = absoluteBearingDeg(path[vertex], after)
+      if (kotlin.math.abs(normalize180(bearingOut - bearingIn)) >= TURN_MIN_DEG) {
+        bends.add(path[vertex])
+      }
+    }
+    return bends
   }
 
   /**

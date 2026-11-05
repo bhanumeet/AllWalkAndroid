@@ -2,6 +2,7 @@ package com.google.ar.core.codelabs.hellogeospatial.helpers
 
 import android.annotation.SuppressLint
 import android.content.Intent
+import android.net.Uri
 import android.location.Address
 import android.location.Geocoder
 import android.opengl.GLSurfaceView
@@ -13,7 +14,6 @@ import android.widget.ImageButton
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
-import androidx.core.content.FileProvider
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import com.google.android.gms.maps.SupportMapFragment
@@ -39,10 +39,23 @@ class HelloGeoView(val activity: HelloGeoActivity) : DefaultLifecycleObserver {
   val editText: EditText = root.findViewById(R.id.destination_text_input)
 
   val distance_text: TextView = root.findViewById(R.id.distance_textView)
+  private val turnRadiusNote: TextView = root.findViewById(R.id.turn_radius_note)
   val find_text: TextView = root.findViewById(R.id.find_textview)
   private val bufferLabel: TextView = root.findViewById(R.id.buffer_label)
   private val providerStatus: TextView = root.findViewById(R.id.provider_status)
   private val bufferSlider: SeekBar = root.findViewById(R.id.buffer_slider)
+
+  fun showSidewalkStatus(text: String) {
+    turnRadiusNote.text = text
+    turnRadiusNote.visibility = View.VISIBLE
+  }
+
+  fun turnRadiusNoteText(): String = turnRadiusNote.text?.toString().orEmpty()
+
+  fun clearTurnRadiusNote() {
+    turnRadiusNote.text = ""
+    turnRadiusNote.visibility = View.GONE
+  }
 
   var ocrIsOn:Boolean = false
 
@@ -77,6 +90,8 @@ class HelloGeoView(val activity: HelloGeoActivity) : DefaultLifecycleObserver {
       it.getMapAsync { googleMap ->
         mapView = MapView(activity, googleMap).also { map ->
           map.setBufferMeters(activity.navGuide.corridorMeters, redraw = true)
+          activity.deviceLatLng?.let { here -> map.showUser(here) }
+          activity.renderer.startRouteIfReady()
         }
       }
     }
@@ -238,29 +253,30 @@ class HelloGeoView(val activity: HelloGeoActivity) : DefaultLifecycleObserver {
         Toast.makeText(activity, "Log is empty", Toast.LENGTH_SHORT).show()
         return
       }
-      activity.navLogger.logEvent(
-        "EXPORT",
-        "Exporting map table file=${file.name}",
-      )
-      val uri = FileProvider.getUriForFile(
-        activity,
-        "${activity.packageName}.fileprovider",
-        file,
-      )
-      val share = Intent(Intent.ACTION_SEND).apply {
+      // System save dialog: the user picks the folder and file name.
+      val save = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+        addCategory(Intent.CATEGORY_OPENABLE)
         type = "text/csv"
-        putExtra(Intent.EXTRA_STREAM, uri)
-        putExtra(Intent.EXTRA_SUBJECT, "BlindNav navigation log")
-        putExtra(
-          Intent.EXTRA_TEXT,
-          "Columns: type, latitude, longitude. Types are path, walk, waypoint, and vps.",
-        )
-        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        putExtra(Intent.EXTRA_TITLE, activity.navLogger.exportBaseName() + ".csv")
       }
-      activity.startActivity(Intent.createChooser(share, "Export navigation log"))
+      activity.startActivityForResult(save, REQUEST_SAVE_LOG)
     } catch (e: Exception) {
       Log.e(TAG, "exportNavigationLog failed", e)
       Toast.makeText(activity, "Export failed: ${e.message}", Toast.LENGTH_LONG).show()
+    }
+  }
+
+  fun writeNavigationLog(uri: Uri) {
+    try {
+      val file = activity.navLogger.currentTableFile()
+      activity.contentResolver.openOutputStream(uri)?.use { out ->
+        file.inputStream().use { it.copyTo(out) }
+      } ?: throw IOException("Could not open destination")
+      activity.navLogger.logEvent("EXPORT", "Saved map table file=${file.name} to $uri")
+      Toast.makeText(activity, "Log saved", Toast.LENGTH_SHORT).show()
+    } catch (e: Exception) {
+      Log.e(TAG, "writeNavigationLog failed", e)
+      Toast.makeText(activity, "Save failed: ${e.message}", Toast.LENGTH_LONG).show()
     }
   }
 
@@ -271,5 +287,9 @@ class HelloGeoView(val activity: HelloGeoActivity) : DefaultLifecycleObserver {
 
   override fun onPause(owner: LifecycleOwner) {
     surfaceView.onPause()
+  }
+
+  companion object {
+    const val REQUEST_SAVE_LOG = 4101
   }
 }

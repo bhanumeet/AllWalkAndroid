@@ -32,6 +32,7 @@ import com.google.ar.core.Session
 import com.google.ar.core.TrackingState
 import com.google.ar.core.examples.java.common.helpers.DisplayRotationHelper
 import com.google.ar.core.examples.java.common.helpers.TrackingStateHelper
+import com.google.ar.core.codelabs.hellogeospatial.helpers.SidewalkWidthClient
 import com.google.ar.core.examples.java.common.samplerender.*
 import com.google.ar.core.examples.java.common.samplerender.arcore.BackgroundRenderer
 import com.google.ar.core.exceptions.CameraNotAvailableException
@@ -227,6 +228,8 @@ class HelloGeoRenderer(val activity: HelloGeoActivity) :
       backgroundRenderer.drawBackground(render)
     }
 
+    if (sosCapture != null) offerSosFrame(session, frame)
+
     // Navigation + voice must keep running even if the camera briefly loses tracking
     // (common when the phone is tilted to glance at the map). Only 3D drawing waits.
     val cameraTracking = camera.trackingState == TrackingState.TRACKING
@@ -259,7 +262,13 @@ class HelloGeoRenderer(val activity: HelloGeoActivity) :
     cameraTracking: Boolean,
   ) {
     val earth = session.earth
-    if (earth?.trackingState != TrackingState.TRACKING) return
+    if (earth?.trackingState != TrackingState.TRACKING) {
+      startRouteIfReady()
+      return
+    }
+
+    lastEarthPoseMs = System.currentTimeMillis()
+    startRouteIfReady()
 
     val cameraGeospatialPose = earth.cameraGeospatialPose
     logVpsQualityPose(cameraGeospatialPose, earth.earthState.toString())
@@ -298,6 +307,11 @@ class HelloGeoRenderer(val activity: HelloGeoActivity) :
     } else {
       activity.doorAssist.stopIfIdle()
     }
+    if (activity.navGuide.captureDestination) {
+      offerDestinationFrame(session, frame)
+    } else if (activity.navGuide.captureSidewalk) {
+      offerSidewalkFrame(session, frame)
+    }
 
     if (isClick && curFrame++ == oneSecond) {
       val curLatlng = LatLng(cameraGeospatialPose.latitude, cameraGeospatialPose.longitude)
@@ -311,6 +325,9 @@ class HelloGeoRenderer(val activity: HelloGeoActivity) :
         )
 
         activity.runOnUiThread {
+          activity.navGuide.sidewalkStatus?.let { activity.view.showSidewalkStatus(it) }
+          activity.view.mapView?.syncTurnRadii(activity.navGuide.turnNowMeters)
+          activity.view.mapView?.syncArrivalBox(activity.navGuide.arrivalHalfWidthM)
           if (status != null) {
             activity.view.distance_text.text = when {
               status.doorAssist && activity.doorAssist.cue.isNotEmpty() -> activity.doorAssist.cue
@@ -410,6 +427,7 @@ class HelloGeoRenderer(val activity: HelloGeoActivity) :
       - If a match is found, displays a snackbar to the user. Otherwise, does nothing.
   */
   private var doorScanTick = 0
+  private val sidewalkWidthClient = SidewalkWidthClient(activity.applicationContext)
 
   /** Door model runs on ARCore frames. CameraX cannot share the camera with the session. */
   private fun offerDoorFrame(session: Session, frame: Frame) {
@@ -428,6 +446,138 @@ class HelloGeoRenderer(val activity: HelloGeoActivity) :
       90
     }
     activity.doorAssist.offer(image, rotation)
+  }
+
+  /** One frame at 10 m from the destination. The reply is spoken when it returns. */
+  private fun offerDestinationFrame(session: Session, frame: Frame) {
+    val image = try {
+      frame.acquireCameraImage()
+    } catch (_: NotYetAvailableException) {
+      return
+    } catch (_: ResourceExhaustedException) {
+      return
+    }
+    activity.navGuide.captureDestination = false
+    val destination = activity.navGuide.destinationLabel
+    val rotation = try {
+      displayRotationHelper.getCameraSensorToDisplayRotation(session.cameraConfig.cameraId)
+    } catch (_: Throwable) {
+      90
+    }
+    activity.runOnUiThread { activity.view.showSidewalkStatus("Checking the destination…") }
+    sidewalkWidthClient.describeDestination(
+      image,
+      rotation,
+      destination,
+    ) { reply ->
+      activity.runOnUiThread {
+        reply?.width?.let { activity.navGuide.applyDestinationWidth(it) }
+        val cue = reply?.line
+        if (cue.isNullOrBlank()) {
+          val failed = sidewalkWidthClient.lastDestinationFailure ?: "Destination check failed."
+          activity.view.showSidewalkStatus(failed)
+          activity.navGuide.speakDestinationCue(failed)
+          activity.view.root.postDelayed({
+            if (activity.view.turnRadiusNoteText() == failed) {
+              activity.view.clearTurnRadiusNote()
+            }
+          }, 4_000L)
+          return@runOnUiThread
+        }
+        activity.view.showSidewalkStatus(cue)
+        activity.navGuide.speakDestinationCue(cue)
+        activity.view.root.postDelayed({
+          if (activity.view.turnRadiusNoteText() == cue) {
+            activity.view.clearTurnRadiusNote()
+          }
+        }, 6_000L)
+      }
+    }
+  }
+
+  /** Navigation status for the next volume-down SOS frame; null when none is wanted. */
+  @Volatile var sosCapture: String? = null
+
+  /** One frame for the LLM SOS. The reply interrupts whatever is playing. */
+  private fun offerSosFrame(session: Session, frame: Frame) {
+    val status = sosCapture ?: return
+    val image = try {
+      frame.acquireCameraImage()
+    } catch (_: NotYetAvailableException) {
+      return
+    } catch (_: ResourceExhaustedException) {
+      return
+    }
+    sosCapture = null
+    val rotation = try {
+      displayRotationHelper.getCameraSensorToDisplayRotation(session.cameraConfig.cameraId)
+    } catch (_: Throwable) {
+      90
+    }
+    sidewalkWidthClient.describeSos(
+      image,
+      rotation,
+      activity.navGuide.destinationLabel,
+      status,
+    ) { help ->
+      activity.runOnUiThread { activity.onSosHelp(help) }
+    }
+  }
+
+  /** One frame per approaching turn. Does not stop navigation while the model replies. */
+  private fun offerSidewalkFrame(session: Session, frame: Frame) {
+    val image = try {
+      frame.acquireCameraImage()
+    } catch (_: NotYetAvailableException) {
+      return
+    } catch (_: ResourceExhaustedException) {
+      return
+    }
+    activity.navGuide.captureSidewalk = false
+    val vertex = activity.navGuide.sidewalkCaptureVertex
+    val rotation = try {
+      displayRotationHelper.getCameraSensorToDisplayRotation(session.cameraConfig.cameraId)
+    } catch (_: Throwable) {
+      90
+    }
+    val checking = activity.navGuide.sidewalkStatus ?: "Checking sidewalk…"
+    activity.runOnUiThread { activity.view.showSidewalkStatus(checking) }
+    sidewalkWidthClient.classify(
+      image,
+      rotation,
+      onSaved = { saved ->
+        activity.runOnUiThread {
+          val note = if (saved) {
+            "Checking sidewalk… photo saved to gallery"
+          } else {
+            "Checking sidewalk… could not save photo"
+          }
+          activity.navGuide.sidewalkStatus = note
+          activity.view.showSidewalkStatus(note)
+        }
+      },
+      onResult = { width ->
+        activity.runOnUiThread {
+          if (width == null) {
+            activity.navGuide.markSidewalkFailed(
+              vertex,
+              sidewalkWidthClient.lastFailure ?: "no result",
+            )
+            val failed = activity.navGuide.sidewalkStatus
+            failed?.let { activity.view.showSidewalkStatus(it) }
+            activity.view.root.postDelayed({
+              if (activity.navGuide.sidewalkStatus == failed) {
+                activity.navGuide.sidewalkStatus = null
+                activity.view.clearTurnRadiusNote()
+              }
+            }, 4_000L)
+          } else {
+            activity.navGuide.applySidewalkWidth(vertex, width)
+            activity.navGuide.sidewalkStatus?.let { activity.view.showSidewalkStatus(it) }
+          }
+        }
+      },
+    )
   }
 
   private fun useOCR(frame: Frame){
@@ -527,7 +677,74 @@ class HelloGeoRenderer(val activity: HelloGeoActivity) :
 
   var earthAnchor: Anchor? = null
   var destinationLatLng: LatLng? = null
-  
+  /** Phone GPS must not move the arrow while this camera pose is current. */
+  @Volatile var lastEarthPoseMs: Long = 0L
+
+  fun earthPoseIsCurrent(): Boolean {
+    return System.currentTimeMillis() - lastEarthPoseMs < 1500L
+  }
+
+  /** Set from the search screen. Directions start from the VPS pose. */
+  @Volatile var pendingDestination: LatLng? = null
+  private var routeRequestStarted = false
+
+  /** Earth pose only after VPS accuracy is good enough to use as the path start. */
+  private fun routeOrigin(): LatLng? {
+    val earth = session?.earth ?: return null
+    if (earth.trackingState != TrackingState.TRACKING) return null
+    val pose = earth.cameraGeospatialPose
+    if (pose.horizontalAccuracy > VPS_HORIZONTAL_M) return null
+    return LatLng(pose.latitude, pose.longitude)
+  }
+
+  @Synchronized
+  fun startRouteIfReady() {
+    if (routeRequestStarted) return
+    if (pendingDestination == null) return
+    if (activity.view.mapView == null) return
+    if (routeOrigin() == null) return
+    val dest = pendingDestination ?: return
+    routeRequestStarted = true
+    pendingDestination = null
+    activity.runOnUiThread { onMapClick(dest) }
+  }
+
+  /**
+   * Map follow and spoken guidance from the phone fix while ARCore is still localizing.
+   * Once Earth is tracking, the camera frame loop takes over.
+   */
+  fun tickCoarseGuidance() {
+    val earth = session?.earth
+    if (earth?.trackingState == TrackingState.TRACKING || earthPoseIsCurrent()) return
+    val here = activity.deviceLatLng ?: return
+    activity.view.mapView?.updateMapPosition(
+      latitude = here.latitude,
+      longitude = here.longitude,
+      heading = activity.deviceHeadingDeg,
+      isClick = isClick,
+    )
+    if (!isClick) return
+    val path = activity.view.mapView?.viewPointList.orEmpty()
+    if (path.size < 2) return
+    val status = activity.navGuide.update(
+      user = here,
+      headingDeg = activity.deviceHeadingDeg,
+      path = path,
+    )
+    activity.navGuide.sidewalkStatus?.let { activity.view.showSidewalkStatus(it) }
+    activity.view.mapView?.syncTurnRadii(activity.navGuide.turnNowMeters)
+    activity.view.mapView?.syncArrivalBox(activity.navGuide.arrivalHalfWidthM)
+    if (status == null) return
+    activity.view.distance_text.text = when {
+      status.doorAssist && activity.doorAssist.cue.isNotEmpty() -> activity.doorAssist.cue
+      status.doorAssist -> "Arrived"
+      else -> status.statusText
+    }
+    if (status.statusText == "Arrived" && !status.doorAssist) {
+      Toast.makeText(activity, "Arrived", Toast.LENGTH_LONG).show()
+      activity.reset(keepSpeaking = true)
+    }
+  }
 
   //latLng represents the geographical coordinates (latitude and longitude)
   fun onMapClick(latLng: LatLng) {
@@ -542,20 +759,15 @@ class HelloGeoRenderer(val activity: HelloGeoActivity) :
         "lng=${"%.8f".format(java.util.Locale.US, latLng.longitude)}",
     )
 
-    // To check the earth is available or not
-    val earth = session?.earth ?: return
-    if (earth.trackingState != TrackingState.TRACKING) {
+    val origin = routeOrigin()
+    if (origin == null) {
+      pendingDestination = latLng
+      routeRequestStarted = false
       return
     }
 
-    //if the tracking state is tracking then...
-    if (earth?.trackingState == TrackingState.TRACKING) {
-      val cameraGeospatialPose = earth.cameraGeospatialPose
-      val curLatitude = cameraGeospatialPose.latitude
-      val curLongitude = cameraGeospatialPose.longitude
-
-      val url:String = getDirectionsUrl(LatLng(curLatitude,curLongitude),latLng)!!
-      fetchJson(url) { stepList ->
+    val url: String = getDirectionsUrl(origin, latLng)!!
+    fetchJson(url) { stepList ->
 
         viewPoints = stepList.toMutableList()
         activity.view.mapView?.erasePoints()
@@ -573,11 +785,10 @@ class HelloGeoRenderer(val activity: HelloGeoActivity) :
         if (path.size >= 2) {
           // Arrival target = last Directions waypoint (polyline end), not search pin.
           val pathEnd = path.last()
-          earthAnchor?.detach()
-          val altitude = earth.cameraGeospatialPose.altitude - 1
-          earthAnchor = earth.createAnchor(
-            pathEnd.latitude, pathEnd.longitude, altitude, 0f, 0f, 0f, 1f,
-          )
+          val liveEarth = session?.earth
+          if (liveEarth?.trackingState == TrackingState.TRACKING) {
+            placeEarthAnchor(liveEarth, pathEnd)
+          }
           activity.view.mapView?.earthMarker?.apply {
             position = pathEnd
             isVisible = true
@@ -591,32 +802,36 @@ class HelloGeoRenderer(val activity: HelloGeoActivity) :
           val waypoints = viewPoints.map {
             LatLng(it.end_location.lat, it.end_location.lng)
           }
+          val headingNow = if (liveEarth?.trackingState == TrackingState.TRACKING) {
+            liveEarth.cameraGeospatialPose.heading
+          } else {
+            activity.deviceHeadingDeg
+          }
+          activity.view.clearTurnRadiusNote()
           activity.navGuide.onRouteReady(
             path = path,
-            user = LatLng(curLatitude, curLongitude),
-            headingDeg = cameraGeospatialPose.heading,
+            user = origin,
+            headingDeg = headingNow,
             waypoints = waypoints,
             place = destinationLatLng,
           )
         }
-      }
     }
 
-    // Temporary marker at search/geocode pin until the route polyline end is known.
-    earthAnchor?.detach()
-    // Place the earth anchor at the same altitude as that of the camera to make it easier to view.
-    val altitude = earth.cameraGeospatialPose.altitude - 1
-    // The rotation quaternion of the anchor in the East-Up-South (EUS) coordinate system.
-    val qx = 0f
-    val qy = 0f
-    val qz = 0f
-    val qw = 1f
-    earthAnchor =
-      earth.createAnchor(latLng.latitude, latLng.longitude, altitude, qx, qy, qz, qw)
-    activity.view.mapView?.earthMarker?.apply {
-      position = latLng
-      isVisible = true
+    val liveEarth = session?.earth
+    if (liveEarth?.trackingState == TrackingState.TRACKING) {
+      placeEarthAnchor(liveEarth, latLng)
+      activity.view.mapView?.earthMarker?.apply {
+        position = latLng
+        isVisible = true
+      }
     }
+  }
+
+  private fun placeEarthAnchor(earth: com.google.ar.core.Earth, at: LatLng) {
+    earthAnchor?.detach()
+    val altitude = earth.cameraGeospatialPose.altitude - 1
+    earthAnchor = earth.createAnchor(at.latitude, at.longitude, altitude, 0f, 0f, 0f, 1f)
   }
 
   private fun fetchJson(url: String, callback: (List<Step>) -> Unit) {
